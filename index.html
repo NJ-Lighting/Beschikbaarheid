@@ -83,11 +83,12 @@
   <div id="wrap">
     <div class="toolbar">
       <div class="left">
+        <img src="NickJonker_def.png" alt="NJ-Lighting logo" style="height:36px;border-radius:6px;display:block;" />
         <button id="prevBtn" aria-label="Vorige">&larr;</button>
         <button id="todayBtn">Vandaag</button>
         <button id="nextBtn" aria-label="Volgende">&rarr;</button>
       </div>
-      <div class="title" id="title">Beschikbaarheid</div>
+      <div class="title" id="title">Beschikbaarheid NJ-Lighting</div>
       <div class="right">
         <label for="viewSelect" style="color:var(--muted)">Weergave:</label>
         <select id="viewSelect">
@@ -109,7 +110,6 @@
   <!-- ical.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/ical.js/1.4.0/ical.min.js"></script>
   <script>
-    // === Instellingen ===
     const ICS_URL_BASE = "./calendar.ics";
     const LOCALE = "nl-NL";
     const WEEK_SLOT_START = 7;
@@ -296,35 +296,54 @@
       document.getElementById("title").textContent = fmtMonthTitle(first);
     }
 
-    // Navigatie
     function goPrev(){ if(currentView==="week"){ currentDate.setDate(currentDate.getDate()-7); renderWeek(currentDate);} else { currentDate.setMonth(currentDate.getMonth()-1); renderMonth(currentDate);} }
     function goNext(){ if(currentView==="week"){ currentDate.setDate(currentDate.getDate()+7); renderWeek(currentDate);} else { currentDate.setMonth(currentDate.getMonth()+1); renderMonth(currentDate);} }
     function goToday(){ currentDate = new Date(); currentView==="week" ? renderWeek(currentDate) : renderMonth(currentDate); }
 
-    // Init
-    <!-- <-- Belangrijk: init aanroepen -->
-<script>
-  init();
+    async function init() {
+      try {
+        await loadICS();
 
-  // === “Nu verversen” via Apps Script Web App (CORS-vrije image ping) ===
-  const TRIGGER_URL = "https://script.google.com/macros/s/AKfycbxGPlFE3E0WKR7Z76sL7P6MkzFgEq3gxnNaWPryQYJbMEAgdMuQFQ8obWntFIgaeVSt/exec";
+        // Listeners
+        document.getElementById("viewSelect").addEventListener("change", e => {
+          currentView = e.target.value;
+          currentView === "week" ? renderWeek(currentDate) : renderMonth(currentDate);
+        });
+        document.getElementById("prevBtn").addEventListener("click", goPrev);
+        document.getElementById("nextBtn").addEventListener("click", goNext);
+        document.getElementById("todayBtn").addEventListener("click", goToday);
 
-  document.getElementById("refreshNowBtn").addEventListener("click", () => {
-    const btn = document.getElementById("refreshNowBtn");
-    const orig = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = "Bezig…";
+        // Start in weekweergave
+        renderWeek(currentDate);
+      } catch (err) {
+        document.getElementById("view").innerHTML = `<div style="padding:16px;">Kon agenda niet laden: ${err.message}</div>`;
+        console.error(err);
+      }
+    }
 
-    const img = new Image();
-    img.onload = () => {
-      btn.textContent = "Update gestart ✔";
-      setTimeout(() => location.reload(), 70000); // ~70s voor Actions + Pages
-    };
-    img.onerror = () => {
-      // Vaak is de trigger tóch aangekomen; we herladen alsnog.
-      btn.textContent = "Gestart (controleer straks)…";
-      setTimeout(() => location.reload(), 70000);
-    };
-    img.src = TRIGGER_URL + "?t=" + Date.now(); // cachebuster
-  });
-</script>
+    // Init direct aanroepen
+    init();
+
+    // Nu verversen knop (CORS-vrij via image ping naar Apps Script Web App)
+    const TRIGGER_URL = "https://script.google.com/macros/s/AKfycbxGPlFE3E0WKR7Z76sL7P6MkzFgEq3gxnNaWPryQYJbMEAgdMuQFQ8obWntFIgaeVSt/exec";
+    document.getElementById("refreshNowBtn").addEventListener("click", () => {
+      const btn = document.getElementById("refreshNowBtn");
+      const orig = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "Bezig…";
+
+      const img = new Image();
+      img.onload = () => {
+        btn.textContent = "Update gestart ✔";
+        setTimeout(() => location.reload(), 70000);
+      };
+      img.onerror = () => {
+        btn.textContent = "Gestart (controleer straks)…";
+        setTimeout(() => location.reload(), 70000);
+      };
+      img.src = TRIGGER_URL + "?t=" + Date.now();
+    });
+  </script>
+</body>
+</html>
+
