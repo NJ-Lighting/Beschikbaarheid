@@ -1,0 +1,34 @@
+name: Fetch ICS
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # elke 30 min (UTC)
+  workflow_dispatch:          # handmatig starten via de Actions-tab
+
+permissions:
+  contents: write             # nodig om naar de repo te kunnen committen
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Download ICS (met user-agent)
+        run: |
+          curl -sSL -A "NJ-Lighting-ICS-Updater/1.0" \
+            "https://api.icalmerge.com/calendar/31794815-9d75-40b9-8883-0399b6c2d949.ics" \
+            -o calendar.ics
+
+      - name: Commit if changed
+        run: |
+          if git diff --quiet -- calendar.ics; then
+            echo "No changes in calendar.ics"
+          else
+            git config user.name "github-actions"
+            git config user.email "actions@users.noreply.github.com"
+            git add calendar.ics
+            git commit -m "Update ICS ($(date -u +'%Y-%m-%d %H:%M:%S') UTC)"
+            git push
+          fi
