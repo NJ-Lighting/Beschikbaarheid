@@ -105,7 +105,6 @@
     </div>
 
     <div id="view"></div>
-    <div class="note">Toont alleen <strong>Bezet</strong>-blokken uit je agenda. Geen titels of details.</div>
   </div>
 
   <!-- ical.js -->
@@ -322,25 +321,46 @@
     function goToday(){ currentDate = new Date(); currentView==="week" ? renderWeek(currentDate) : renderMonth(currentDate); }
 
     // Init
-    async function init() {
-      try {
-        await loadICS();
-        document.getElementById("viewSelect").addEventListener("change", e => {
-          currentView = e.target.value;
-          currentView === "week" ? renderWeek(currentDate) : renderMonth(currentDate);
-        });
-        document.getElementById("prevBtn").addEventListener("click", goPrev);
-        document.getElementById("nextBtn").addEventListener("click", goNext);
-        document.getElementById("todayBtn").addEventListener("click", goToday);
+    // Init
+async function init() {
+  try {
+    await loadICS();
 
-        // Start met week
-        renderWeek(currentDate);
-      } catch (err) {
-        document.getElementById("view").innerHTML = `<div style="padding:16px;">Kon agenda niet laden: ${err.message}</div>`;
-        console.error(err);
-      }
+    // --- NIEUW: titel zetten en logo toevoegen ---
+    // Titeltekst
+    const titleEl = document.getElementById("title");
+    if (titleEl) titleEl.textContent = "Beschikbaarheid NJ-Lighting";
+
+    // Logo links in de toolbar plaatsen (voor de titel)
+    const leftBar = document.querySelector(".left");
+    if (leftBar) {
+      const logo = new Image();
+      logo.src = "NickJonker_def.png"; // staat in je repo-root
+      logo.alt = "NJ-Lighting logo";
+      logo.style.height = "36px";
+      logo.style.borderRadius = "6px";
+      logo.style.display = "block";
+      // Logo vóóraan plaatsen
+      leftBar.insertBefore(logo, leftBar.firstChild);
     }
-    init();
+    // --- EINDE NIEUW ---
+
+    document.getElementById("viewSelect").addEventListener("change", e => {
+      currentView = e.target.value;
+      currentView === "week" ? renderWeek(currentDate) : renderMonth(currentDate);
+    });
+    document.getElementById("prevBtn").addEventListener("click", goPrev);
+    document.getElementById("nextBtn").addEventListener("click", goNext);
+    document.getElementById("todayBtn").addEventListener("click", goToday);
+
+    // Start met week
+    renderWeek(currentDate);
+  } catch (err) {
+    document.getElementById("view").innerHTML = `<div style="padding:16px;">Kon agenda niet laden: ${err.message}</div>`;
+    console.error(err);
+  }
+}
+
 
     // === “Nu verversen” via Apps Script Web App (CORS-vrij image ping) ===
     const TRIGGER_URL = "https://script.google.com/macros/s/AKfycbxGPlFE3E0WKR7Z76sL7P6MkzFgEq3gxnNaWPryQYJbMEAgdMuQFQ8obWntFIgaeVSt/exec";
