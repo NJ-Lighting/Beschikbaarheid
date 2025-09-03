@@ -92,18 +92,17 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/ical.js/1.4.0/ical.min.js"></script>
   <script>
     // === Instellingen ===
-    const ICS_URL_BASE = "https://api.icalmerge.com/calendar/31794815-9d75-40b9-8883-0399b6c2d949.ics";
+    const ICS_URL_BASE = "./calendar.ics";     // uit de repo (door GitHub Actions bijgewerkt)
     const TIMEZONE = "Europe/Amsterdam";
     const LOCALE = "nl-NL";
-    // Weekslots ruim zetten om zeker alles te zien (pas desgewenst aan)
     const WEEK_SLOT_START = 7;   // 07:00
-    const WEEK_SLOT_END   = 23;  // 23:00 (laatste getoonde start is 22:00)
+    const WEEK_SLOT_END   = 23;  // 23:00
 
-    // CORS fallback staat AAN voor GitHub Pages; zet op false als het ook zonder werkt
-    const USE_CORS_PROXY = true;
-    const CORS_PROXY = "https://cors.isomorphic-git.org/";
+    // Geen proxy nodig: dezelfde origin
+    const USE_CORS_PROXY = false;
+    const CORS_PROXY = "";
 
-    // Cachebusting (iCalMerge kan cachen)
+    // Cachebusting (forceer nieuwste Pages build/asset)
     function cacheBustedUrl() {
       const sep = ICS_URL_BASE.includes("?") ? "&" : "?";
       return `${ICS_URL_BASE}${sep}t=${Date.now()}`;
@@ -124,7 +123,7 @@
     };
     const startOfMonday = (d) => {
       const x = new Date(d);
-      const day = x.getDay(); // 0 = zondag, 1 = maandag
+      const day = x.getDay(); // 0 = zo, 1 = ma
       const diff = (day === 0 ? -6 : 1 - day);
       x.setDate(x.getDate() + diff);
       x.setHours(0,0,0,0);
@@ -134,9 +133,9 @@
 
     function overlaps(aStart, aEnd, bStart, bEnd) { return aStart < bEnd && aEnd > bStart; }
 
-    // ICS laden met cachebust + (optionele) proxy
+    // ICS laden (zelfde origin) + cachebuster
     async function loadICS() {
-      const raw = USE_CORS_PROXY ? (CORS_PROXY + cacheBustedUrl()) : cacheBustedUrl();
+      const raw = cacheBustedUrl();
       const resp = await fetch(raw);
       if (!resp.ok) throw new Error("ICS ophalen mislukt: " + resp.status);
       const text = await resp.text();
@@ -144,7 +143,6 @@
       const jcalData = ICAL.parse(text);
       const comp = new ICAL.Component(jcalData);
       rawEvents = comp.getAllSubcomponents("vevent").map(e => new ICAL.Event(e));
-
       console.log(`ICS geladen: ${rawEvents.length} events (na parse)`);
     }
 
