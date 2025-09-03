@@ -57,7 +57,6 @@
     .weekday-header { display:grid; grid-template-columns: repeat(7, 1fr); }
     .weekday-header div { text-align:center; padding:8px 0; background:#0c1320; border-right:1px solid var(--border); border-left:1px solid var(--border); }
     .note { color:var(--muted); font-size:13px; margin:10px 2px; }
-    /* Scrolbare weektabel op mobiel */
     .week-scroller { overflow:auto; max-height: 75vh; }
   </style>
 </head>
@@ -76,6 +75,7 @@
           <option value="week">Week</option>
           <option value="month">Maand</option>
         </select>
+        <button id="refreshNowBtn" title="ICS nu updaten">Nu verversen</button>
       </div>
     </div>
 
@@ -92,28 +92,20 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/ical.js/1.4.0/ical.min.js"></script>
   <script>
     // === Instellingen ===
-    const ICS_URL_BASE = "./calendar.ics";     // uit de repo (door GitHub Actions bijgewerkt)
-    const TIMEZONE = "Europe/Amsterdam";
+    const ICS_URL_BASE = "./calendar.ics";     // uit de repo (door workflow bijgewerkt)
     const LOCALE = "nl-NL";
-    const WEEK_SLOT_START = 7;   // 07:00
-    const WEEK_SLOT_END   = 23;  // 23:00
+    const WEEK_SLOT_START = 7;
+    const WEEK_SLOT_END   = 23;
 
-    // Geen proxy nodig: dezelfde origin
-    const USE_CORS_PROXY = false;
-    const CORS_PROXY = "";
-
-    // Cachebusting (forceer nieuwste Pages build/asset)
     function cacheBustedUrl() {
       const sep = ICS_URL_BASE.includes("?") ? "&" : "?";
       return `${ICS_URL_BASE}${sep}t=${Date.now()}`;
     }
 
-    // === State ===
-    let rawEvents = []; // ICAL.Event[]
+    let rawEvents = [];
     let currentDate = new Date();
     let currentView = "week";
 
-    // Helpers
     const fmtMonthTitle = (d) => d.toLocaleDateString(LOCALE, { month: "long", year: "numeric" });
     const fmtWeekTitle = (monday) => {
       const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6);
@@ -121,247 +113,128 @@
       const endStr   = sunday.toLocaleDateString(LOCALE, { day: "numeric", month: "short", year: "numeric" });
       return `${startStr} – ${endStr}`;
     };
-    const startOfMonday = (d) => {
-      const x = new Date(d);
-      const day = x.getDay(); // 0 = zo, 1 = ma
-      const diff = (day === 0 ? -6 : 1 - day);
-      x.setDate(x.getDate() + diff);
-      x.setHours(0,0,0,0);
-      return x;
-    };
+    const startOfMonday = (d) => { const x = new Date(d); const diff = (x.getDay() === 0 ? -6 : 1 - x.getDay()); x.setDate(x.getDate()+diff); x.setHours(0,0,0,0); return x; };
     const startOfMonth = (d) => { const x = new Date(d); x.setDate(1); x.setHours(0,0,0,0); return x; };
+    const overlaps = (aStart,aEnd,bStart,bEnd) => aStart < bEnd && aEnd > bStart;
 
-    function overlaps(aStart, aEnd, bStart, bEnd) { return aStart < bEnd && aEnd > bStart; }
-
-    // ICS laden (zelfde origin) + cachebuster
     async function loadICS() {
-      const raw = cacheBustedUrl();
-      const resp = await fetch(raw);
+      const resp = await fetch(cacheBustedUrl());
       if (!resp.ok) throw new Error("ICS ophalen mislukt: " + resp.status);
       const text = await resp.text();
-
       const jcalData = ICAL.parse(text);
       const comp = new ICAL.Component(jcalData);
       rawEvents = comp.getAllSubcomponents("vevent").map(e => new ICAL.Event(e));
-      console.log(`ICS geladen: ${rawEvents.length} events (na parse)`);
     }
 
-    // Expand alle voorkomens in bereik (incl. RRULE + all-day)
     function getOccurrencesInRange(rangeStart, rangeEnd) {
       const results = [];
       for (const ev of rawEvents) {
         let dur = ev.duration;
-        if (!dur) {
-          try { dur = ev.endDate.subtractDate(ev.startDate); } catch (_) {}
-        }
+        if (!dur) try { dur = ev.endDate.subtractDate(ev.startDate); } catch (_) {}
         const toJs = (icalTime) => icalTime.toJSDate();
 
         if (ev.isRecurring()) {
-          const exp = new ICAL.RecurExpansion({
-            component: ev.component,
-            dtstart: ev.startDate
-          });
+          const exp = new ICAL.RecurExpansion({ component: ev.component, dtstart: ev.startDate });
           while (!exp.complete) {
-            const next = exp.next();
-            if (!next) break;
-
-            const occStartJS = toJs(next);
-            let occEndJS;
-            if (dur) {
-              const occStartTime = ICAL.Time.fromJSDate(occStartJS, next.isDate);
-              const occEndTime = occStartTime.clone();
-              occEndTime.addDuration(dur);
-              occEndJS = occEndTime.toJSDate();
-            } else {
-              const tmp = new Date(occStartJS);
-              tmp.setDate(tmp.getDate() + 1);
-              occEndJS = tmp;
-            }
-
-            if (occEndJS < rangeStart) continue;
-            if (occStartJS > rangeEnd) break;
-
-            results.push({ start: occStartJS, end: occEndJS });
+            const next = exp.next(); if (!next) break;
+            const occStart = toJs(next);
+            let occEnd;
+            if (dur) { const occStartTime = ICAL.Time.fromJSDate(occStart, next.isDate); const occEndTime = occStartTime.clone(); occEndTime.addDuration(dur); occEnd = occEndTime.toJSDate(); }
+            else { occEnd = new Date(occStart.getTime() + 86400000); }
+            if (occEnd < rangeStart) continue; if (occStart > rangeEnd) break;
+            results.push({ start: occStart, end: occEnd });
           }
         } else {
           const s = toJs(ev.startDate);
-          let e;
-          if (dur) {
-            const st = ICAL.Time.fromJSDate(s, ev.startDate.isDate);
-            const et = st.clone(); et.addDuration(dur); e = et.toJSDate();
-          } else {
-            e = ev.endDate ? toJs(ev.endDate) : new Date(s.getTime() + 24*3600*1000);
-          }
-          if (overlaps(s, e, rangeStart, rangeEnd)) {
-            results.push({ start: s, end: e });
-          }
+          let e = ev.endDate ? toJs(ev.endDate) : new Date(s.getTime()+86400000);
+          if (overlaps(s,e,rangeStart,rangeEnd)) results.push({ start:s,end:e });
         }
       }
       return results;
     }
 
-    // Weekweergave
     function renderWeek(dateRef) {
-      const viewEl = document.getElementById("view");
-      viewEl.innerHTML = "";
-      const scroller = document.createElement("div");
-      scroller.className = "week-scroller";
+      const viewEl = document.getElementById("view"); viewEl.innerHTML="";
+      const scroller = document.createElement("div"); scroller.className="week-scroller";
 
       const monday = startOfMonday(dateRef);
       const weekStart = new Date(monday);
-      const weekEnd = new Date(monday); weekEnd.setDate(weekEnd.getDate() + 7);
-
+      const weekEnd = new Date(monday); weekEnd.setDate(weekEnd.getDate()+7);
       const occ = getOccurrencesInRange(weekStart, weekEnd);
 
-      // header
-      const table = document.createElement("table");
-      const thead = document.createElement("thead");
-      const thr = document.createElement("tr");
+      const table=document.createElement("table");
+      const thead=document.createElement("thead"); const thr=document.createElement("tr");
+      const thTime=document.createElement("th"); thTime.textContent="Tijd"; thTime.className="hour-col"; thr.appendChild(thTime);
 
-      const thTime = document.createElement("th");
-      thTime.textContent = "Tijd";
-      thTime.className = "hour-col";
-      thr.appendChild(thTime);
+      for(let d=0; d<7; d++){ const day=new Date(monday); day.setDate(monday.getDate()+d); const th=document.createElement("th"); th.textContent=day.toLocaleDateString(LOCALE,{weekday:"long",day:"numeric",month:"short"}); thr.appendChild(th);}
+      thead.appendChild(thr); table.appendChild(thead);
 
-      for (let d = 0; d < 7; d++) {
-        const day = new Date(monday); day.setDate(monday.getDate() + d);
-        const th = document.createElement("th");
-        th.textContent = day.toLocaleDateString(LOCALE, { weekday: "long", day: "numeric", month: "short" });
-        thr.appendChild(th);
-      }
-      thead.appendChild(thr);
-      table.appendChild(thead);
-
-      const tbody = document.createElement("tbody");
-      for (let h = WEEK_SLOT_START; h < WEEK_SLOT_END; h++) {
-        const tr = document.createElement("tr");
-
-        const tdHour = document.createElement("td");
-        tdHour.className = "hour-col";
-        tdHour.textContent = `${String(h).padStart(2,"0")}:00`;
-        tr.appendChild(tdHour);
-
-        for (let d = 0; d < 7; d++) {
-          const cell = document.createElement("td");
-          const slotStart = new Date(monday); slotStart.setDate(monday.getDate() + d); slotStart.setHours(h,0,0,0);
-          const slotEnd = new Date(slotStart); slotEnd.setHours(h+1);
-
-          const busy = occ.some(o => overlaps(slotStart, slotEnd, o.start, o.end));
-          cell.className = busy ? "busy" : "free";
-          cell.textContent = busy ? "Bezet" : "";
+      const tbody=document.createElement("tbody");
+      for(let h=WEEK_SLOT_START; h<WEEK_SLOT_END; h++){
+        const tr=document.createElement("tr");
+        const tdHour=document.createElement("td"); tdHour.className="hour-col"; tdHour.textContent=`${String(h).padStart(2,"0")}:00`; tr.appendChild(tdHour);
+        for(let d=0; d<7; d++){
+          const cell=document.createElement("td");
+          const slotStart=new Date(monday); slotStart.setDate(monday.getDate()+d); slotStart.setHours(h,0,0,0);
+          const slotEnd=new Date(slotStart); slotEnd.setHours(h+1);
+          const busy=occ.some(o=>overlaps(slotStart,slotEnd,o.start,o.end));
+          cell.className=busy?"busy":"free"; cell.textContent=busy?"Bezet":"";
           tr.appendChild(cell);
         }
         tbody.appendChild(tr);
       }
-      table.appendChild(tbody);
-      scroller.appendChild(table);
-      viewEl.appendChild(scroller);
-
-      document.getElementById("title").textContent = `Week ${fmtWeekTitle(monday)}`;
+      table.appendChild(tbody); scroller.appendChild(table); viewEl.appendChild(scroller);
+      document.getElementById("title").textContent=`Week ${fmtWeekTitle(monday)}`;
     }
 
-    // Maandweergave
     function renderMonth(dateRef) {
-      const viewEl = document.getElementById("view");
-      viewEl.innerHTML = "";
+      const viewEl=document.getElementById("view"); viewEl.innerHTML="";
+      const first=startOfMonth(dateRef); const firstWeekMonday=startOfMonday(first);
+      const gridStart=new Date(firstWeekMonday); const gridEnd=new Date(gridStart); gridEnd.setDate(gridEnd.getDate()+42);
+      const occ=getOccurrencesInRange(gridStart,gridEnd);
 
-      const first = startOfMonth(dateRef);
-      const firstWeekMonday = startOfMonday(first);
-      const gridStart = new Date(firstWeekMonday);
-      const gridEnd = new Date(gridStart); gridEnd.setDate(gridEnd.getDate() + 42); // 6 weken
+      const wk=document.createElement("div"); wk.className="weekday-header"; ["ma","di","wo","do","vr","za","zo"].forEach(w=>{const el=document.createElement("div");el.textContent=w.toUpperCase();wk.appendChild(el);}); viewEl.appendChild(wk);
 
-      const occ = getOccurrencesInRange(gridStart, gridEnd);
-
-      const wk = document.createElement("div");
-      wk.className = "weekday-header";
-      ["ma","di","wo","do","vr","za","zo"].forEach(w => {
-        const el = document.createElement("div");
-        el.textContent = w.toUpperCase();
-        viewEl.appendChild(wk);
-        wk.appendChild(el);
-      });
-
-      const grid = document.createElement("div");
-      grid.className = "month-grid";
-
-      let cursor = new Date(gridStart);
-      const thisMonth = first.getMonth();
-
-      for (let i = 0; i < 42; i++) {
-        const cell = document.createElement("div");
-        cell.className = "daycell";
-
-        const dayStart = new Date(cursor); dayStart.setHours(0,0,0,0);
-        const dayEnd = new Date(dayStart); dayEnd.setDate(dayEnd.getDate() + 1);
-
-        const dayNum = document.createElement("div");
-        dayNum.className = "daynum";
-        dayNum.textContent = String(dayStart.getDate());
-        cell.appendChild(dayNum);
-
-        const isBusy = occ.some(o => overlaps(dayStart, dayEnd, o.start, o.end));
-        if (isBusy) {
-          cell.classList.add("daybusy");
-          const badge = document.createElement("div");
-          badge.className = "badge";
-          badge.textContent = "Bezet";
-          cell.appendChild(badge);
-        }
-
-        if (cursor.getMonth() !== thisMonth) cell.classList.add("outside");
-
-        grid.appendChild(cell);
-        cursor.setDate(cursor.getDate() + 1);
+      const grid=document.createElement("div"); grid.className="month-grid";
+      let cursor=new Date(gridStart); const thisMonth=first.getMonth();
+      for(let i=0;i<42;i++){ const cell=document.createElement("div"); cell.className="daycell";
+        const dayStart=new Date(cursor); dayStart.setHours(0,0,0,0); const dayEnd=new Date(dayStart); dayEnd.setDate(dayEnd.getDate()+1);
+        const dayNum=document.createElement("div"); dayNum.className="daynum"; dayNum.textContent=String(dayStart.getDate()); cell.appendChild(dayNum);
+        const isBusy=occ.some(o=>overlaps(dayStart,dayEnd,o.start,o.end)); if(isBusy){ cell.classList.add("daybusy"); const badge=document.createElement("div"); badge.className="badge"; badge.textContent="Bezet"; cell.appendChild(badge); }
+        if(cursor.getMonth()!==thisMonth) cell.classList.add("outside");
+        grid.appendChild(cell); cursor.setDate(cursor.getDate()+1);
       }
-
-      viewEl.appendChild(grid);
-      document.getElementById("title").textContent = fmtMonthTitle(first);
+      viewEl.appendChild(grid); document.getElementById("title").textContent=fmtMonthTitle(first);
     }
 
-    // Navigatie
-    function goPrev() {
-      if (currentView === "week") {
-        currentDate.setDate(currentDate.getDate() - 7);
-        renderWeek(currentDate);
-      } else {
-        currentDate.setMonth(currentDate.getMonth() - 1);
-        renderMonth(currentDate);
-      }
-    }
-    function goNext() {
-      if (currentView === "week") {
-        currentDate.setDate(currentDate.getDate() + 7);
-        renderWeek(currentDate);
-      } else {
-        currentDate.setMonth(currentDate.getMonth() + 1);
-        renderMonth(currentDate);
-      }
-    }
-    function goToday() {
-      currentDate = new Date();
-      currentView === "week" ? renderWeek(currentDate) : renderMonth(currentDate);
-    }
+    function goPrev(){ if(currentView==="week"){ currentDate.setDate(currentDate.getDate()-7); renderWeek(currentDate);} else { currentDate.setMonth(currentDate.getMonth()-1); renderMonth(currentDate);} }
+    function goNext(){ if(currentView==="week"){ currentDate.setDate(currentDate.getDate()+7); renderWeek(currentDate);} else { currentDate.setMonth(currentDate.getMonth()+1); renderMonth(currentDate);} }
+    function goToday(){ currentDate=new Date(); currentView==="week"?renderWeek(currentDate):renderMonth(currentDate); }
 
-    // Init
     async function init() {
       try {
         await loadICS();
-        document.getElementById("viewSelect").addEventListener("change", (e) => {
-          currentView = e.target.value;
-          currentView === "week" ? renderWeek(currentDate) : renderMonth(currentDate);
-        });
-        document.getElementById("prevBtn").addEventListener("click", goPrev);
-        document.getElementById("nextBtn").addEventListener("click", goNext);
-        document.getElementById("todayBtn").addEventListener("click", goToday);
-
-        // Start met weekweergave
+        document.getElementById("viewSelect").addEventListener("change",e=>{currentView=e.target.value; currentView==="week"?renderWeek(currentDate):renderMonth(currentDate);});
+        document.getElementById("prevBtn").addEventListener("click",goPrev);
+        document.getElementById("nextBtn").addEventListener("click",goNext);
+        document.getElementById("todayBtn").addEventListener("click",goToday);
         renderWeek(currentDate);
-      } catch (err) {
-        document.getElementById("view").innerHTML = `<div style="padding:16px;">Kon agenda niet laden: ${err.message}</div>`;
-        console.error(err);
-      }
+      } catch(err){ document.getElementById("view").innerHTML=`<div style="padding:16px;">Kon agenda niet laden: ${err.message}</div>`; console.error(err);}
     }
     init();
+
+    // === Nu verversen knop via Apps Script Web App ===
+    const TRIGGER_URL = "https://script.google.com/macros/s/AKfycbxGPlFE3E0WKR7Z76sL7P6MkzFgEq3gxnNaWPryQYJbMEAgdMuQFQ8obWntFIgaeVSt/exec";
+    document.getElementById("refreshNowBtn").addEventListener("click", async () => {
+      const btn=document.getElementById("refreshNowBtn"); const orig=btn.textContent;
+      btn.disabled=true; btn.textContent="Bezig…";
+      try {
+        const r=await fetch(TRIGGER_URL,{method:"POST"}); const data=await r.json().catch(()=>({}));
+        if(!r.ok||!data.ok) throw new Error(data.error||("Status "+r.status));
+        btn.textContent="Update gestart ✔";
+        setTimeout(()=>location.reload(),70000);
+      } catch(e){ console.error(e); btn.textContent="Mislukt, probeer opnieuw"; setTimeout(()=>{btn.textContent=orig; btn.disabled=false;},3000);}
+    });
   </script>
 </body>
 </html>
