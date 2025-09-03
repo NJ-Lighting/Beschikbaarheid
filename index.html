@@ -32,19 +32,19 @@
     #view {
       background:var(--panel); border:1px solid var(--border); border-radius:14px; overflow:hidden;
     }
-    /* Weekrooster */
+    /* Tabel (week) */
     table { width:100%; border-collapse:collapse; table-layout:fixed; }
     th, td { border:1px solid var(--border); text-align:center; }
     th { background: #0c1320; color:var(--text); font-weight:600; padding:10px 6px; }
     td { padding:8px 4px; height:40px; }
-    .hour-col { width:80px; color:var(--muted); background:#0d1524; }
+    .hour-col { width:80px; color:var(--muted); background:#0d1524; position:sticky; left:0; z-index:1; }
     .busy { background: var(--busy); color:#fff; font-weight:700; border-color: var(--busy-border); }
     .free { background: var(--free); }
     .legend { display:flex; gap:14px; align-items:center; color:var(--muted); font-size:14px; margin:10px 2px 16px; }
     .dot { width:14px; height:14px; border-radius:4px; display:inline-block; vertical-align:middle; margin-right:6px; }
     .dot.busy { background:var(--busy); border:1px solid var(--busy-border); }
     .dot.free { background:var(--free); border:1px solid var(--border); }
-    /* Maandoverzicht */
+    /* Maand */
     .month-grid { display:grid; grid-template-columns: repeat(7, 1fr); border-top:1px solid var(--border); border-left:1px solid var(--border); }
     .daycell {
       border-right:1px solid var(--border); border-bottom:1px solid var(--border); min-height:110px; position:relative; padding:6px;
@@ -57,6 +57,8 @@
     .weekday-header { display:grid; grid-template-columns: repeat(7, 1fr); }
     .weekday-header div { text-align:center; padding:8px 0; background:#0c1320; border-right:1px solid var(--border); border-left:1px solid var(--border); }
     .note { color:var(--muted); font-size:13px; margin:10px 2px; }
+    /* Scrolbare weektabel op mobiel */
+    .week-scroller { overflow:auto; max-height: 75vh; }
   </style>
 </head>
 <body>
@@ -83,27 +85,34 @@
     </div>
 
     <div id="view"></div>
-    <div class="note">Toont alleen **Bezet**-blokken uit je agenda. Geen titels of details.</div>
+    <div class="note">Toont alleen <strong>Bezet</strong>-blokken uit je agenda. Geen titels of details.</div>
   </div>
 
-  <!-- ical.js voor het parsen van ICS -->
+  <!-- ical.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/ical.js/1.4.0/ical.min.js"></script>
   <script>
     // === Instellingen ===
-    const ICS_URL = "https://api.icalmerge.com/calendar/31794815-9d75-40b9-8883-0399b6c2d949.ics";
+    const ICS_URL_BASE = "https://api.icalmerge.com/calendar/31794815-9d75-40b9-8883-0399b6c2d949.ics";
     const TIMEZONE = "Europe/Amsterdam";
     const LOCALE = "nl-NL";
+    // Weekslots ruim zetten om zeker alles te zien (pas desgewenst aan)
     const WEEK_SLOT_START = 7;   // 07:00
-    const WEEK_SLOT_END   = 23;  // tot 23:00 (laatste slot start 22:00)
+    const WEEK_SLOT_END   = 23;  // 23:00 (laatste getoonde start is 22:00)
 
-    // CORS fallback: zet op true als je CORS-fout krijgt, of host via je eigen kleine proxy
-    const USE_CORS_PROXY = false;
+    // CORS fallback staat AAN voor GitHub Pages; zet op false als het ook zonder werkt
+    const USE_CORS_PROXY = true;
     const CORS_PROXY = "https://cors.isomorphic-git.org/";
 
+    // Cachebusting (iCalMerge kan cachen)
+    function cacheBustedUrl() {
+      const sep = ICS_URL_BASE.includes("?") ? "&" : "?";
+      return `${ICS_URL_BASE}${sep}t=${Date.now()}`;
+    }
+
     // === State ===
-    let rawEvents = []; // lijst van ICAL.Event
-    let currentDate = new Date(); // referentiedatum voor navigatie
-    let currentView = "week";     // "week" | "month"
+    let rawEvents = []; // ICAL.Event[]
+    let currentDate = new Date();
+    let currentView = "week";
 
     // Helpers
     const fmtMonthTitle = (d) => d.toLocaleDateString(LOCALE, { month: "long", year: "numeric" });
@@ -123,46 +132,68 @@
     };
     const startOfMonth = (d) => { const x = new Date(d); x.setDate(1); x.setHours(0,0,0,0); return x; };
 
-    // Overlap check
     function overlaps(aStart, aEnd, bStart, bEnd) { return aStart < bEnd && aEnd > bStart; }
 
-    // Haal ICS op en parse naar ICAL.Event
+    // ICS laden met cachebust + (optionele) proxy
     async function loadICS() {
-      const url = USE_CORS_PROXY ? (CORS_PROXY + ICS_URL) : ICS_URL;
-      const resp = await fetch(url);
+      const raw = USE_CORS_PROXY ? (CORS_PROXY + cacheBustedUrl()) : cacheBustedUrl();
+      const resp = await fetch(raw);
       if (!resp.ok) throw new Error("ICS ophalen mislukt: " + resp.status);
       const text = await resp.text();
 
       const jcalData = ICAL.parse(text);
       const comp = new ICAL.Component(jcalData);
       rawEvents = comp.getAllSubcomponents("vevent").map(e => new ICAL.Event(e));
+
+      console.log(`ICS geladen: ${rawEvents.length} events (na parse)`);
     }
 
-    // Haal alle voorkomens (incl. herhalingen) in een bereik op als {start:Date,end:Date}
+    // Expand alle voorkomens in bereik (incl. RRULE + all-day)
     function getOccurrencesInRange(rangeStart, rangeEnd) {
       const results = [];
       for (const ev of rawEvents) {
+        let dur = ev.duration;
+        if (!dur) {
+          try { dur = ev.endDate.subtractDate(ev.startDate); } catch (_) {}
+        }
+        const toJs = (icalTime) => icalTime.toJSDate();
+
         if (ev.isRecurring()) {
-          // Herhalende events uitbreiden
-          const expand = new ICAL.RecurExpansion({
+          const exp = new ICAL.RecurExpansion({
             component: ev.component,
             dtstart: ev.startDate
           });
-          while (!expand.complete) {
-            const next = expand.next();
+          while (!exp.complete) {
+            const next = exp.next();
             if (!next) break;
-            const occStart = next.toJSDate();
-            // Eindtijd = occStart + duur originele event
-            const dur = ev.duration;
-            const occEnd = dur ? new ICAL.Time(occStart).clone().addDuration(dur).toJSDate()
-                               : ev.endDate.toJSDate(); // fallback
-            if (occEnd < rangeStart) continue;
-            if (occStart > rangeEnd) break; // voorbij bereik
-            results.push({ start: occStart, end: occEnd });
+
+            const occStartJS = toJs(next);
+            let occEndJS;
+            if (dur) {
+              const occStartTime = ICAL.Time.fromJSDate(occStartJS, next.isDate);
+              const occEndTime = occStartTime.clone();
+              occEndTime.addDuration(dur);
+              occEndJS = occEndTime.toJSDate();
+            } else {
+              const tmp = new Date(occStartJS);
+              tmp.setDate(tmp.getDate() + 1);
+              occEndJS = tmp;
+            }
+
+            if (occEndJS < rangeStart) continue;
+            if (occStartJS > rangeEnd) break;
+
+            results.push({ start: occStartJS, end: occEndJS });
           }
         } else {
-          const s = ev.startDate.toJSDate();
-          const e = ev.endDate.toJSDate();
+          const s = toJs(ev.startDate);
+          let e;
+          if (dur) {
+            const st = ICAL.Time.fromJSDate(s, ev.startDate.isDate);
+            const et = st.clone(); et.addDuration(dur); e = et.toJSDate();
+          } else {
+            e = ev.endDate ? toJs(ev.endDate) : new Date(s.getTime() + 24*3600*1000);
+          }
           if (overlaps(s, e, rangeStart, rangeEnd)) {
             results.push({ start: s, end: e });
           }
@@ -171,10 +202,12 @@
       return results;
     }
 
-    // Render weekrooster (uurvakken)
+    // Weekweergave
     function renderWeek(dateRef) {
       const viewEl = document.getElementById("view");
       viewEl.innerHTML = "";
+      const scroller = document.createElement("div");
+      scroller.className = "week-scroller";
 
       const monday = startOfMonday(dateRef);
       const weekStart = new Date(monday);
@@ -223,12 +256,13 @@
         tbody.appendChild(tr);
       }
       table.appendChild(tbody);
-      viewEl.appendChild(table);
+      scroller.appendChild(table);
+      viewEl.appendChild(scroller);
 
       document.getElementById("title").textContent = `Week ${fmtWeekTitle(monday)}`;
     }
 
-    // Render maandoverzicht (dag-blokken)
+    // Maandweergave
     function renderMonth(dateRef) {
       const viewEl = document.getElementById("view");
       viewEl.innerHTML = "";
@@ -236,20 +270,18 @@
       const first = startOfMonth(dateRef);
       const firstWeekMonday = startOfMonday(first);
       const gridStart = new Date(firstWeekMonday);
-      const gridEnd = new Date(gridStart); gridEnd.setDate(gridEnd.getDate() + 42); // 6 weken raster
+      const gridEnd = new Date(gridStart); gridEnd.setDate(gridEnd.getDate() + 42); // 6 weken
 
       const occ = getOccurrencesInRange(gridStart, gridEnd);
 
-      // Weekdagen kop
       const wk = document.createElement("div");
       wk.className = "weekday-header";
-      const wds = ["ma", "di", "wo", "do", "vr", "za", "zo"];
-      wds.forEach(w => {
+      ["ma","di","wo","do","vr","za","zo"].forEach(w => {
         const el = document.createElement("div");
         el.textContent = w.toUpperCase();
+        viewEl.appendChild(wk);
         wk.appendChild(el);
       });
-      viewEl.appendChild(wk);
 
       const grid = document.createElement("div");
       grid.className = "month-grid";
