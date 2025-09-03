@@ -2,8 +2,8 @@ name: Fetch ICS
 
 on:
   schedule:
-    - cron: "*/30 * * * *"
-  workflow_dispatch:
+    - cron: "*/10 * * * *"    # elke 10 min (UTC)
+  workflow_dispatch:           # handmatig triggerbaar via API/knop
 
 permissions:
   contents: write
@@ -21,7 +21,7 @@ jobs:
             "https://api.icalmerge.com/calendar/31794815-9d75-40b9-8883-0399b6c2d949.ics" \
             -o calendar.ics
 
-      - name: Commit calendar.ics
+      - name: Commit calendar.ics (only if changed)
         run: |
           git config user.name "github-actions"
           git config user.email "actions@users.noreply.github.com"
