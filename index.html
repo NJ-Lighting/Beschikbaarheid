@@ -32,7 +32,6 @@
     #view {
       background:var(--panel); border:1px solid var(--border); border-radius:14px; overflow:hidden;
     }
-    /* Tabel (week) */
     table { width:100%; border-collapse:collapse; table-layout:fixed; }
     th, td { border:1px solid var(--border); text-align:center; }
     th { background: #0c1320; color:var(--text); font-weight:600; padding:10px 6px; }
@@ -44,7 +43,6 @@
     .dot { width:14px; height:14px; border-radius:4px; display:inline-block; vertical-align:middle; margin-right:6px; }
     .dot.busy { background:var(--busy); border:1px solid var(--busy-border); }
     .dot.free { background:var(--free); border:1px solid var(--border); }
-    /* Maand */
     .month-grid { display:grid; grid-template-columns: repeat(7, 1fr); border-top:1px solid var(--border); border-left:1px solid var(--border); }
     .daycell {
       border-right:1px solid var(--border); border-bottom:1px solid var(--border); min-height:110px; position:relative; padding:6px;
@@ -88,11 +86,9 @@
     <div class="note">Toont alleen <strong>Bezet</strong>-blokken uit je agenda. Geen titels of details.</div>
   </div>
 
-  <!-- ical.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/ical.js/1.4.0/ical.min.js"></script>
   <script>
-    // === Instellingen ===
-    const ICS_URL_BASE = "./calendar.ics";     // uit de repo (door workflow bijgewerkt)
+    const ICS_URL_BASE = "./calendar.ics";
     const LOCALE = "nl-NL";
     const WEEK_SLOT_START = 7;
     const WEEK_SLOT_END   = 23;
@@ -223,17 +219,16 @@
     }
     init();
 
-    // === Nu verversen knop via Apps Script Web App ===
+    // === Nu verversen knop via Apps Script Web App (image ping i.p.v. fetch) ===
     const TRIGGER_URL = "https://script.google.com/macros/s/AKfycbxGPlFE3E0WKR7Z76sL7P6MkzFgEq3gxnNaWPryQYJbMEAgdMuQFQ8obWntFIgaeVSt/exec";
-    document.getElementById("refreshNowBtn").addEventListener("click", async () => {
+    document.getElementById("refreshNowBtn").addEventListener("click", () => {
       const btn=document.getElementById("refreshNowBtn"); const orig=btn.textContent;
       btn.disabled=true; btn.textContent="Bezig…";
-      try {
-        const r=await fetch(TRIGGER_URL,{method:"POST"}); const data=await r.json().catch(()=>({}));
-        if(!r.ok||!data.ok) throw new Error(data.error||("Status "+r.status));
-        btn.textContent="Update gestart ✔";
-        setTimeout(()=>location.reload(),70000);
-      } catch(e){ console.error(e); btn.textContent="Mislukt, probeer opnieuw"; setTimeout(()=>{btn.textContent=orig; btn.disabled=false;},3000);}
+
+      const img=new Image();
+      img.onload=()=>{ btn.textContent="Update gestart ✔"; setTimeout(()=>location.reload(),70000); };
+      img.onerror=()=>{ btn.textContent="Gestart (controleer straks)…"; setTimeout(()=>location.reload(),70000); };
+      img.src=TRIGGER_URL+"?t="+Date.now();
     });
   </script>
 </body>
