@@ -73,14 +73,26 @@ function parseICalDate(str) {
 
 function formatDateTime(dt) {
   if (!dt) return '';
-  return dt.toLocaleString('nl-NL', {
-    weekday: 'short',
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
+  return dt.toLocaleTimeString('nl-NL', {
     hour: '2-digit',
     minute: '2-digit'
   });
+}
+
+function formatDayHeading(dt) {
+  return dt.toLocaleDateString('nl-NL', {
+    weekday: 'short',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric'
+  });
+}
+
+function dateKey(dt) {
+  const y = dt.getFullYear();
+  const m = String(dt.getMonth() + 1).padStart(2, '0');
+  const d = String(dt.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
 }
 
 function escapeHtml(str = '') {
@@ -137,7 +149,6 @@ function parseICS(text) {
 async function fetchEventsFromConfig(config) {
   if (!config.url) return [];
 
-  // Gebruik backend-proxy vanwege CORS
   const proxiedUrl = `/api/ical-proxy?url=${encodeURIComponent(config.url)}`;
 
   const res = await fetch(proxiedUrl);
@@ -148,56 +159,109 @@ async function fetchEventsFromConfig(config) {
   const text = await res.text();
   const events = parseICS(text);
 
-  events.sort((a, b) => {
-    const ta = a.startDate ? a.startDate.getTime() : 0;
-    const tb = b.startDate ? b.startDate.getTime() : 0;
+  // Voeg config info toe zodat we later de kalendernaam weten
+  return events
+    .filter(ev => ev.startDate) // alleen events met startdatum
+    .map(ev => ({
+      cfg: config,
+      calendarName: config.naam || 'Kalender',
+      ev
+    }));
+}
+
+// ---------- Render agenda per dag ----------
+
+function renderAgenda(allEvents) {
+  if (!allEvents.length) {
+    return '<p class="ev-meta">Geen events gevonden.</p>';
+  }
+
+  // sorteer alle events op starttijd
+  allEvents.sort((a, b) => {
+    const ta = a.ev.startDate ? a.ev.startDate.getTime() : 0;
+    const tb = b.ev.startDate ? b.ev.startDate.getTime() : 0;
     return ta - tb;
   });
 
-  return events;
-}
-
-// ---------- Render ----------
-
-function renderEvent(ev, cfg) {
-  const f = cfg.fields || {};
-  const parts = [];
-
-  if (f.summary && ev.summary) {
-    parts.push(`<div class="ev-title">${escapeHtml(ev.summary)}</div>`);
+  // groepeer per dag
+  const byDay = new Map();
+  for (const item of allEvents) {
+    const key = dateKey(item.ev.startDate);
+    if (!byDay.has(key)) {
+      byDay.set(key, []);
+    }
+    byDay.get(key).push(item);
   }
 
-  const metaPieces = [];
-  if (f.start && ev.startDate) {
-    metaPieces.push(`Start: ${escapeHtml(formatDateTime(ev.startDate))}`);
-  }
-  if (f.end && ev.endDate) {
-    metaPieces.push(`Einde: ${escapeHtml(formatDateTime(ev.endDate))}`);
-  }
+  const dayKeys = Array.from(byDay.keys()).sort();
 
-  if (metaPieces.length) {
-    parts.push(`<div class="ev-meta">${metaPieces.join(' • ')}</div>`);
-  }
+  const sections = dayKeys.map(key => {
+    const items = byDay.get(key);
+    const dayDate = items[0].ev.startDate;
+    const heading = formatDayHeading(dayDate);
 
-  if (f.location && ev.location) {
-    parts.push(
-      `<div class="ev-location">Locatie: ${escapeHtml(ev.location)}</div>`
-    );
-  }
+    const rows = items
+      .map(({ ev, cfg, calendarName }) => {
+        const f = cfg.fields || {};
 
-  if (f.description && ev.description) {
-    parts.push(
-      `<div class="ev-description">${escapeHtml(ev.description)}</div>`
-    );
-  }
+        const parts = [];
 
-  if (!parts.length) {
-    parts.push(
-      '<div class="ev-meta">Geen zichtbare velden voor dit item.</div>'
-    );
-  }
+        // tijd
+        if (f.start && ev.startDate) {
+          let timeRange = formatDateTime(ev.startDate);
+          if (f.end && ev.endDate) {
+            timeRange += ` – ${formatDateTime(ev.endDate)}`;
+          }
+          parts.push(
+            `<div class="agenda-time">${escapeHtml(timeRange)}</div>`
+          );
+        }
 
-  return `<div class="event">${parts.join('')}</div>`;
+        // titel
+        if (f.summary && ev.summary) {
+          parts.push(
+            `<div class="agenda-title">${escapeHtml(ev.summary)}</div>`
+          );
+        }
+
+        // kalendernaam tag
+        parts.push(
+          `<div class="agenda-cal-tag">${escapeHtml(calendarName)}</div>`
+        );
+
+        // locatie
+        if (f.location && ev.location) {
+          parts.push(
+            `<div class="agenda-location">${escapeHtml(
+              ev.location
+            )}</div>`
+          );
+        }
+
+        // omschrijving
+        if (f.description && ev.description) {
+          parts.push(
+            `<div class="agenda-description">${escapeHtml(
+              ev.description
+            )}</div>`
+          );
+        }
+
+        return `<div class="agenda-item">${parts.join('')}</div>`;
+      })
+      .join('');
+
+    return `
+      <section class="agenda-day">
+        <h2 class="agenda-day-header">${escapeHtml(heading)}</h2>
+        <div class="agenda-day-items">
+          ${rows}
+        </div>
+      </section>
+    `;
+  });
+
+  return sections.join('');
 }
 
 async function initOverview() {
@@ -214,36 +278,39 @@ async function initOverview() {
 
     container.textContent = 'Agenda’s worden geladen…';
 
-    const sections = [];
+    const allEvents = [];
+    const errors = [];
 
     for (const cfg of configs) {
-      const name = cfg.naam || 'Kalender';
       try {
-        const events = await fetchEventsFromConfig(cfg);
-        const eventsHtml = events.length
-          ? events.map(ev => renderEvent(ev, cfg)).join('')
-          : '<p class="ev-meta">Geen events gevonden in deze iCal.</p>';
-
-        sections.push(`
-          <section class="calendar">
-            <h2>${escapeHtml(name)}</h2>
-            ${eventsHtml}
-          </section>
-        `);
+        const eventsForCfg = await fetchEventsFromConfig(cfg);
+        allEvents.push(...eventsForCfg);
       } catch (err) {
         console.error('Fout bij laden iCal', cfg, err);
-        sections.push(`
-          <section class="calendar">
-            <h2>${escapeHtml(name)}</h2>
-            <p class="error">Kon deze iCal niet laden (${escapeHtml(
-              err.message || 'onbekende fout'
-            )}).</p>
-          </section>
-        `);
+        errors.push(
+          `Kon iCal van "${cfg.naam || 'Kalender'}" niet laden: ${
+            err.message || 'onbekende fout'
+          }`
+        );
       }
     }
 
-    container.innerHTML = sections.join('');
+    let html = '';
+
+    if (errors.length) {
+      html += `<div class="error">${errors
+        .map(escapeHtml)
+        .join('<br>')}</div>`;
+    }
+
+    if (!allEvents.length) {
+      html +=
+        '<p class="ev-meta">Geen events gevonden in de beschikbare kalenders.</p>';
+    } else {
+      html += renderAgenda(allEvents);
+    }
+
+    container.innerHTML = html;
   } catch (err) {
     console.error('Fout bij loadConfigs', err);
     container.innerHTML =

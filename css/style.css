@@ -235,3 +235,65 @@ button {
   font-size: 0.9rem;
   color: #9ca3af;
 }
+
+/* Agenda-overzicht per dag */
+
+.agenda-day {
+  background: #020617;
+  border-radius: 0.75rem;
+  padding: 1rem 1.25rem 1.25rem;
+  margin-bottom: 1.25rem;
+  border: 1px solid #1f2937;
+  box-shadow: 0 12px 30px rgba(0,0,0,0.4);
+}
+
+.agenda-day-header {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+  text-transform: capitalize;
+  border-bottom: 1px solid #1f2937;
+  padding-bottom: 0.35rem;
+  color: #e5e7eb;
+}
+
+.agenda-item {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid #111827;
+}
+
+.agenda-item:last-child {
+  border-bottom: none;
+}
+
+.agenda-time {
+  font-size: 0.85rem;
+  color: #9ca3af;
+  margin-bottom: 0.1rem;
+}
+
+.agenda-title {
+  font-weight: 600;
+  margin-bottom: 0.1rem;
+}
+
+.agenda-cal-tag {
+  display: inline-block;
+  margin-top: 0.1rem;
+  margin-bottom: 0.2rem;
+  padding: 0.05rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  background: #0f172a;
+  color: #e5e7eb;
+}
+
+.agenda-location {
+  font-size: 0.8rem;
+  color: #9ca3af;
+}
+
+.agenda-description {
+  font-size: 0.85rem;
+  margin-top: 0.2rem;
+  white-space: pre-wrap;
+}
