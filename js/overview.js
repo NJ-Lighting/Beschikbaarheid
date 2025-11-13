@@ -1,4 +1,3 @@
-// js/overview.js
 import { supabase } from './supabase.client.js';
 
 // Globale state
@@ -186,6 +185,16 @@ function endOfMonth(date) {
   return d;
 }
 
+// ISO-weeknummer (NL-stijl)
+function getIsoWeek(date) {
+  const tmp = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const day = tmp.getUTCDay() || 7;
+  tmp.setUTCDate(tmp.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil(((tmp - yearStart) / 86400000 + 1) / 7);
+  return weekNo;
+}
+
 // ---------- Fetch via Vercel proxy ----------
 
 async function fetchEventsFromConfig(config) {
@@ -217,14 +226,12 @@ function renderAgendaView(items) {
     return '<p class="ev-meta">Geen events gevonden.</p>';
   }
 
-  // sorteren op starttijd
   items.sort((a, b) => {
     const ta = a.ev.startDate ? a.ev.startDate.getTime() : 0;
     const tb = b.ev.startDate ? b.ev.startDate.getTime() : 0;
     return ta - tb;
   });
 
-  // groepeer per dag
   const byDay = new Map();
   for (const item of items) {
     const key = dateKey(item.ev.startDate);
@@ -312,6 +319,8 @@ function renderWeekView(items, refDate) {
   }
 
   const weekdayLabels = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
+  const weekNo = getIsoWeek(start);
+  const weekTitle = `<p class="info info-range">Week ${weekNo}</p>`;
 
   const cols = days
     .map((day, idx) => {
@@ -362,16 +371,14 @@ function renderWeekView(items, refDate) {
     })
     .join('');
 
-  return `<div class="week-grid">${cols}</div>`;
+  return `${weekTitle}<div class="week-grid">${cols}</div>`;
 }
 
 function renderMonthView(items, refDate) {
   const startMonth = startOfMonth(refDate);
   const endMonthDate = endOfMonth(refDate);
 
-  // begin rooster op maandag van de week waarin de 1e ligt
   const gridStart = startOfWeek(startMonth);
-  // eind rooster op zondag van de week waarin de laatste dag ligt
   const gridEnd = addDays(startOfWeek(endMonthDate), 6);
 
   const days = [];
@@ -401,15 +408,19 @@ function renderMonthView(items, refDate) {
       const dayNum = dayDate.getDate();
 
       const evHtml = dayItems
-        .slice(0, 3) // max 3 regels per cel
+        .slice(0, 3)
         .map(({ ev, cfg }) => {
           const f = cfg.fields || {};
           const pieces = [];
 
           if (f.start && ev.startDate) {
+            let timeRange = formatTime(ev.startDate);
+            if (f.end && ev.endDate) {
+              timeRange += `–${formatTime(ev.endDate)}`;
+            }
             pieces.push(
               `<span class="month-event-time">${escapeHtml(
-                formatTime(ev.startDate)
+                timeRange
               )}</span>`
             );
           }
@@ -471,7 +482,8 @@ function updateRangeLabel() {
       month: '2-digit',
       year: 'numeric'
     });
-    el.textContent = `Week van ${startLabel} t/m ${endLabel}`;
+    const weekNo = getIsoWeek(start);
+    el.textContent = `Week ${weekNo}: ${startLabel} t/m ${endLabel}`;
     return;
   }
 
@@ -522,7 +534,6 @@ function setView(view) {
     referenceDate = new Date();
   }
 
-  // actieve knop stylen
   const views = ['agenda', 'week', 'month'];
   views.forEach(v => {
     const btn = document.getElementById(`view-${v}`);
@@ -535,7 +546,6 @@ function setView(view) {
 }
 
 function shiftReference(direction) {
-  // direction: -1 of +1
   if (currentView === 'week') {
     referenceDate = addDays(referenceDate, direction * 7);
   } else if (currentView === 'month') {
@@ -543,7 +553,6 @@ function shiftReference(direction) {
     d.setMonth(d.getMonth() + direction);
     referenceDate = d;
   } else {
-    // in agenda-view doet nav niets
     return;
   }
   renderCurrentView();
@@ -581,10 +590,8 @@ async function initOverview() {
       }
     }
 
-    // default: agenda view
     setView('agenda');
 
-    // buttons
     document
       .getElementById('view-agenda')
       ?.addEventListener('click', () => setView('agenda'));
