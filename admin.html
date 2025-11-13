@@ -2,7 +2,7 @@
 <html lang="nl">
 <head>
   <meta charset="utf-8" />
-  <title>iCal Admin</title>
+  <title>iCal Admin – Beschikbaarheid</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="stylesheet" href="css/style.css" />
 </head>
@@ -10,41 +10,105 @@
   <header class="top-header">
     <h1>iCal Admin</h1>
     <p class="info">
-      Hier beheer je alle iCal-links. Het overzicht zie je op de
-      <a href="index.html">Agenda Overzicht</a>-pagina.
+      Beheer hier alle agenda-bronnen (iCal/ICS). Je kunt gewone iCal-links
+      gebruiken, maar ook een <strong>Google Calendar embed-link</strong> plakken
+      en laten omzetten naar een iCal-URL.
     </p>
   </header>
 
   <main>
-    <!-- Nieuwe link toevoegen -->
+    <!-- Formulier: nieuwe / bestaande bron -->
     <section class="card">
-      <h2>Nieuwe iCal-link toevoegen</h2>
+      <h2>Agenda-bron toevoegen of wijzigen</h2>
+
       <div class="grid-form">
-        <label>
-          Naam (bijv. "40-45 Motion Crew")
-          <input id="new-name" type="text" placeholder="Naam van de kalender">
-        </label>
-        <label>
-          iCal-URL
-          <input id="new-url" type="url" placeholder="https://... .ics">
-        </label>
+        <input type="hidden" id="editing-id" />
+
+        <div>
+          <label for="ical-name">Naam</label>
+          <input id="ical-name" type="text" placeholder="Bijv. 40-45 Motion, TP Productions..." />
+        </div>
+
+        <div>
+          <label for="ical-url">iCal / ICS-URL</label>
+          <input
+            id="ical-url"
+            type="url"
+            placeholder="Bijv. https://calendar.google.com/calendar/ical/.../basic.ics"
+          />
+        </div>
+
+        <!-- Helper: Google embed / calendar ID omzetten -->
+        <div>
+          <label for="gcal-raw">Google Calendar embed-URL of Calendar ID (optioneel)</label>
+          <input
+            id="gcal-raw"
+            type="text"
+            class="small-input"
+            placeholder="Plak hier je embed-link of ID, bijv. https://calendar.google.com/calendar/embed?src=... of b161se...@import.calendar.google.com"
+          />
+          <button id="gcal-convert" type="button" class="btn btn-secondary">
+            Genereer iCal-URL
+          </button>
+          <p class="info">
+            Tip: in Google Calendar kun je via <em>Instellingen → Integrate calendar</em> ook direct
+            de <strong>Secret address in iCal format</strong> kopiëren en hier in het iCal-veld plakken.
+          </p>
+        </div>
+
+        <div>
+          <span>Welke velden tonen in het overzicht?</span>
+          <div class="field-checkboxes pill-wrap">
+            <label class="pill">
+              <input type="checkbox" id="field-summary" checked />
+              Titel
+            </label>
+            <label class="pill">
+              <input type="checkbox" id="field-description" />
+              Omschrijving
+            </label>
+            <label class="pill">
+              <input type="checkbox" id="field-location" checked />
+              Locatie
+            </label>
+            <label class="pill">
+              <input type="checkbox" id="field-start" checked />
+              Starttijd
+            </label>
+            <label class="pill">
+              <input type="checkbox" id="field-end" checked />
+              Eindtijd
+            </label>
+          </div>
+        </div>
+
+        <div>
+          <button id="save-source" type="button" class="btn btn-primary">
+            Opslaan
+          </button>
+          <button id="reset-form" type="button" class="btn btn-secondary">
+            Annuleren / Nieuw
+          </button>
+        </div>
+
+        <p id="admin-message" class="info"></p>
       </div>
-      <div class="pill-wrap">
-        <span class="pill">
-          <span>✔</span> Standaard zichtbare velden: titel, tijden &amp; locatie
-        </span>
-      </div>
-      <button id="add-link" class="btn btn-primary">Toevoegen</button>
     </section>
 
-    <!-- Overzicht van alle links -->
+    <!-- Overzicht bestaande bronnen -->
     <section class="card">
-      <h2>Opgeslagen iCal-links</h2>
-      <div id="links-container"></div>
+      <h2>Bestaande agenda-bronnen</h2>
+      <div id="links-container">
+        <p class="loading">Laden van bronnen…</p>
+      </div>
     </section>
+
+    <p class="info">
+      Terug naar overzicht:
+      <a href="index.html">Agenda weergave</a>
+    </p>
   </main>
 
-  <!-- Let op: module -->
   <script type="module" src="js/admin.js"></script>
 </body>
 </html>

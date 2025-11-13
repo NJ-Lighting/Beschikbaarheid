@@ -1,22 +1,79 @@
 // js/admin.js
 import { supabase } from './supabase.client.js';
 
-function mapRowToConfig(row) {
+function $(sel) {
+  return document.querySelector(sel);
+}
+
+function setMessage(text, isError = false) {
+  const el = $('#admin-message');
+  if (!el) return;
+  el.textContent = text || '';
+  el.classList.toggle('error', !!isError);
+}
+
+// ---- Google embed / ID → ICS helper ----
+
+function buildGoogleIcsUrl(raw) {
+  if (!raw) return null;
+  raw = raw.trim();
+
+  // Als het al een ICS-link is → gewoon teruggeven
+  if (raw.startsWith('http') && raw.includes('/calendar/ical/')) {
+    return raw;
+  }
+
+  // Als het een volledige URL is (embed, etc.)
+  let calendarId = null;
+  if (raw.startsWith('http')) {
+    try {
+      const url = new URL(raw);
+      if (
+        url.hostname === 'calendar.google.com' &&
+        url.pathname.startsWith('/calendar/embed')
+      ) {
+        const src = url.searchParams.get('src');
+        if (src) {
+          calendarId = src;
+        }
+      }
+    } catch (e) {
+      console.warn('Kon Google-URL niet parsen', e);
+    }
+  }
+
+  // Als het geen geldige URL was, of geen embed, dan kan het direct een ID zijn
+  if (!calendarId && !raw.startsWith('http')) {
+    // b161se...@import.calendar.google.com
+    calendarId = raw;
+  }
+
+  if (!calendarId) {
+    return null;
+  }
+
+  const enc = encodeURIComponent(calendarId);
+  // Standaard: public/basic.ics. Als de agenda niet openbaar is, kun je beter
+  // in Google zelf de "Secret iCal address" pakken en direct in het iCal-vak plakken.
+  return `https://calendar.google.com/calendar/ical/${enc}/public/basic.ics`;
+}
+
+// ---- Supabase helpers ----
+
+function mapRow(row) {
   return {
     id: row.id,
-    naam: row.name,
+    name: row.name,
     url: row.url,
-    fields: {
-      summary: row.show_summary,
-      description: row.show_description,
-      location: row.show_location,
-      start: row.show_start,
-      end: row.show_end
-    }
+    show_summary: !!row.show_summary,
+    show_description: !!row.show_description,
+    show_location: !!row.show_location,
+    show_start: !!row.show_start,
+    show_end: !!row.show_end
   };
 }
 
-async function loadLinks() {
+async function loadSources() {
   const { data, error } = await supabase
     .from('ical_sources')
     .select('*')
@@ -26,191 +83,238 @@ async function loadLinks() {
     console.error('Supabase load error', error);
     throw error;
   }
-  return data.map(mapRowToConfig);
+  return data.map(mapRow);
 }
 
-function renderLinksTable(configs) {
-  const container = document.getElementById('links-container');
+async function insertSource(payload) {
+  const { data, error } = await supabase
+    .from('ical_sources')
+    .insert(payload)
+    .select()
+    .single();
 
-  if (!configs.length) {
-    container.innerHTML = '<p class="no-links">Nog geen iCal-links toegevoegd.</p>';
-    return;
-  }
-
-  const headerRow = `
-    <tr>
-      <th style="width: 18%;">Naam</th>
-      <th style="width: 32%;">iCal-URL</th>
-      <th style="width: 30%;">Zichtbare info</th>
-      <th style="width: 20%;">Acties</th>
-    </tr>`;
-
-  const rows = configs
-    .map(link => {
-      const f = link.fields || {};
-      return `
-        <tr data-id="${link.id}">
-          <td>
-            <input
-              type="text"
-              class="small-input"
-              value="${link.naam || ''}"
-              data-field="naam"
-            />
-          </td>
-          <td>
-            <input
-              type="url"
-              class="small-input"
-              value="${link.url || ''}"
-              data-field="url"
-            />
-          </td>
-          <td class="field-checkboxes">
-            <label><input type="checkbox" data-field="summary" ${f.summary ? 'checked' : ''}> Titel</label>
-            <label><input type="checkbox" data-field="description" ${f.description ? 'checked' : ''}> Omschrijving</label>
-            <label><input type="checkbox" data-field="location" ${f.location ? 'checked' : ''}> Locatie</label>
-            <label><input type="checkbox" data-field="start" ${f.start ? 'checked' : ''}> Starttijd</label>
-            <label><input type="checkbox" data-field="end" ${f.end ? 'checked' : ''}> Eindtijd</label>
-          </td>
-          <td>
-            <button class="btn btn-secondary btn-copy">Kopieer iCal-link</button><br>
-            <button class="btn btn-secondary btn-save">Opslaan</button>
-            <button class="btn btn-danger btn-delete">Verwijderen</button>
-          </td>
-        </tr>
-      `;
-    })
-    .join('');
-
-  container.innerHTML = `
-    <table class="links-table">
-      <thead>${headerRow}</thead>
-      <tbody>${rows}</tbody>
-    </table>
-  `;
-
-  attachRowEvents(configs);
+  if (error) throw error;
+  return mapRow(data);
 }
 
-function attachRowEvents(configs) {
-  const container = document.getElementById('links-container');
+async function updateSource(id, payload) {
+  const { data, error } = await supabase
+    .from('ical_sources')
+    .update(payload)
+    .eq('id', id)
+    .select()
+    .single();
 
-  container.querySelectorAll('tr[data-id]').forEach(row => {
-    const id = row.getAttribute('data-id');
-    const link = configs.find(l => l.id === id);
-    if (!link) return;
+  if (error) throw error;
+  return mapRow(data);
+}
 
-    // Opslaan
-    row.querySelector('.btn-save')?.addEventListener('click', async () => {
-      const nameInput = row.querySelector('input[data-field="naam"]');
-      const urlInput = row.querySelector('input[data-field="url"]');
+async function deleteSource(id) {
+  const { error } = await supabase
+    .from('ical_sources')
+    .delete()
+    .eq('id', id);
 
-      const naam = nameInput.value.trim();
-      const url = urlInput.value.trim();
+  if (error) throw error;
+}
 
-      const fields = {};
-      ['summary', 'description', 'location', 'start', 'end'].forEach(key => {
-        const cb = row.querySelector(
-          `input[type="checkbox"][data-field="${key}"]`
-        );
-        fields[key] = cb ? cb.checked : false;
+// ---- Render overview ----
+
+async function renderSources() {
+  const container = $('#links-container');
+  if (!container) return;
+
+  container.innerHTML = '<p class="loading">Laden van bronnen…</p>';
+
+  try {
+    const sources = await loadSources();
+
+    if (!sources.length) {
+      container.innerHTML =
+        '<p class="no-links">Er zijn nog geen agenda-bronnen. Voeg er hierboven één toe.</p>';
+      return;
+    }
+
+    const rows = sources
+      .map(src => {
+        const fields = [];
+        if (src.show_summary) fields.push('Titel');
+        if (src.show_description) fields.push('Omschrijving');
+        if (src.show_location) fields.push('Locatie');
+        if (src.show_start) fields.push('Start');
+        if (src.show_end) fields.push('Einde');
+
+        const fieldsText = fields.length ? fields.join(', ') : '—';
+
+        return `
+          <tr data-id="${src.id}">
+            <td>${escapeHtml(src.name || '')}</td>
+            <td>
+              <span class="small-url">${escapeHtml(src.url || '')}</span>
+            </td>
+            <td>${escapeHtml(fieldsText)}</td>
+            <td>
+              <button class="btn btn-secondary btn-edit" type="button">Bewerken</button>
+              <button class="btn btn-danger btn-delete" type="button">Verwijderen</button>
+            </td>
+          </tr>
+        `;
+      })
+      .join('');
+
+    container.innerHTML = `
+      <div class="table-wrapper">
+        <table class="links-table">
+          <thead>
+            <tr>
+              <th>Naam</th>
+              <th>URL</th>
+              <th>Zichtbare velden</th>
+              <th>Acties</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows}
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    container.querySelectorAll('.btn-edit').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const tr = btn.closest('tr');
+        const id = tr?.getAttribute('data-id');
+        if (!id) return;
+        const src = sources.find(s => s.id === id);
+        if (src) fillFormForEdit(src);
       });
+    });
 
-      const { error } = await supabase
-        .from('ical_sources')
-        .update({
-          name: naam,
-          url,
-          show_summary: fields.summary,
-          show_description: fields.description,
-          show_location: fields.location,
-          show_start: fields.start,
-          show_end: fields.end
-        })
-        .eq('id', id);
+    container.querySelectorAll('.btn-delete').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const tr = btn.closest('tr');
+        const id = tr?.getAttribute('data-id');
+        if (!id) return;
+        const ok = confirm(
+          'Weet je zeker dat je deze agenda-bron wilt verwijderen?'
+        );
+        if (!ok) return;
+        try {
+          await deleteSource(id);
+          setMessage('Agenda-bron verwijderd.');
+          renderSources();
+        } catch (err) {
+          console.error('Delete error', err);
+          setMessage('Kon agenda-bron niet verwijderen.', true);
+        }
+      });
+    });
+  } catch (err) {
+    console.error('renderSources error', err);
+    container.innerHTML =
+      '<p class="error">Kon de iCal-bronnen niet laden uit de database.</p>';
+  }
+}
 
-      if (error) {
-        console.error('Supabase update error', error);
-        alert('Opslaan mislukt 😢');
+function escapeHtml(str = '') {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+// ---- Form helpers ----
+
+function resetForm() {
+  $('#editing-id').value = '';
+  $('#ical-name').value = '';
+  $('#ical-url').value = '';
+  $('#gcal-raw').value = '';
+  $('#field-summary').checked = true;
+  $('#field-description').checked = false;
+  $('#field-location').checked = true;
+  $('#field-start').checked = true;
+  $('#field-end').checked = true;
+  setMessage('');
+}
+
+function fillFormForEdit(src) {
+  $('#editing-id').value = src.id;
+  $('#ical-name').value = src.name || '';
+  $('#ical-url').value = src.url || '';
+  $('#gcal-raw').value = '';
+  $('#field-summary').checked = !!src.show_summary;
+  $('#field-description').checked = !!src.show_description;
+  $('#field-location').checked = !!src.show_location;
+  $('#field-start').checked = !!src.show_start;
+  $('#field-end').checked = !!src.show_end;
+  setMessage(`Bewerken: ${src.name || '(naamloos)'}`);
+}
+
+// ---- Init ----
+
+async function initAdmin() {
+  resetForm();
+  renderSources();
+
+  $('#save-source')?.addEventListener('click', async () => {
+    const id = $('#editing-id').value || null;
+    const name = $('#ical-name').value.trim();
+    const url = $('#ical-url').value.trim();
+
+    if (!name || !url) {
+      setMessage('Naam en iCal-URL zijn verplicht.', true);
+      return;
+    }
+
+    const payload = {
+      name,
+      url,
+      show_summary: $('#field-summary').checked,
+      show_description: $('#field-description').checked,
+      show_location: $('#field-location').checked,
+      show_start: $('#field-start').checked,
+      show_end: $('#field-end').checked
+    };
+
+    try {
+      if (id) {
+        await updateSource(id, payload);
+        setMessage('Agenda-bron bijgewerkt.');
       } else {
-        alert('Opgeslagen 👍');
+        await insertSource(payload);
+        setMessage('Agenda-bron toegevoegd.');
       }
-    });
+      resetForm();
+      renderSources();
+    } catch (err) {
+      console.error('Save error', err);
+      setMessage('Fout bij opslaan van agenda-bron.', true);
+    }
+  });
 
-    // Verwijderen
-    row.querySelector('.btn-delete')?.addEventListener('click', async () => {
-      if (!confirm('Deze iCal-link verwijderen?')) return;
+  $('#reset-form')?.addEventListener('click', () => {
+    resetForm();
+  });
 
-      const { error } = await supabase
-        .from('ical_sources')
-        .delete()
-        .eq('id', id);
-
-      if (error) {
-        console.error('Supabase delete error', error);
-        alert('Verwijderen mislukt 😢');
-      } else {
-        await refreshLinks();
-      }
-    });
-
-    // Kopieer iCal-link
-    row.querySelector('.btn-copy')?.addEventListener('click', async () => {
-      const url = link.url || '';
-      if (!url) {
-        alert('Geen URL ingesteld voor deze link.');
-        return;
-      }
-      try {
-        await navigator.clipboard.writeText(url);
-        alert('iCal-link gekopieerd naar klembord 📋');
-      } catch (e) {
-        console.error(e);
-        alert('Kon niet naar klembord kopiëren, selecteer de link handmatig.');
-      }
-    });
+  // Google embed/ID → ICS
+  $('#gcal-convert')?.addEventListener('click', () => {
+    const raw = $('#gcal-raw').value.trim();
+    if (!raw) {
+      setMessage('Plak eerst een Google embed-URL of Calendar ID.', true);
+      return;
+    }
+    const ics = buildGoogleIcsUrl(raw);
+    if (!ics) {
+      setMessage(
+        'Kon hier geen geldige Google Calendar-ID uithalen. Plak de embed-URL of het Calendar ID.',
+        true
+      );
+      return;
+    }
+    $('#ical-url').value = ics;
+    setMessage('iCal-URL gegenereerd uit Google embed / ID.');
   });
 }
 
-async function handleAddLink() {
-  const nameInput = document.getElementById('new-name');
-  const urlInput = document.getElementById('new-url');
-  const naam = nameInput.value.trim();
-  const url = urlInput.value.trim();
-
-  if (!naam || !url) {
-    alert('Vul zowel een naam als een iCal-URL in.');
-    return;
-  }
-
-  const { error } = await supabase.from('ical_sources').insert({
-    name: naam,
-    url,
-    show_summary: true,
-    show_description: true,
-    show_location: true,
-    show_start: true,
-    show_end: true
-  });
-
-  if (error) {
-    console.error('Supabase insert error', error);
-    alert('Toevoegen mislukt 😢');
-    return;
-  }
-
-  nameInput.value = '';
-  urlInput.value = '';
-  await refreshLinks();
-}
-
-async function refreshLinks() {
-  const configs = await loadLinks();
-  renderLinksTable(configs);
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-  document.getElementById('add-link')?.addEventListener('click', handleAddLink);
-  refreshLinks();
-});
+document.addEventListener('DOMContentLoaded', initAdmin);
