@@ -1,19 +1,37 @@
 // js/overview.js
+import { supabase } from './supabase.client.js';
 
-const STORAGE_KEY_OV = 'ical_links_config_v1';
+// ---- Configs uit Supabase ----
 
-function loadConfigs() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY_OV);
-    if (!raw) return [];
-    return JSON.parse(raw);
-  } catch (e) {
-    console.error('Kan iCal-config niet laden', e);
-    return [];
-  }
+function mapRowToConfig(row) {
+  return {
+    id: row.id,
+    naam: row.name,
+    url: row.url,
+    fields: {
+      summary: row.show_summary,
+      description: row.show_description,
+      location: row.show_location,
+      start: row.show_start,
+      end: row.show_end
+    }
+  };
 }
 
-// ICS helpers
+async function loadConfigs() {
+  const { data, error } = await supabase
+    .from('ical_sources')
+    .select('*')
+    .order('name', { ascending: true });
+
+  if (error) {
+    console.error('Supabase load error', error);
+    throw error;
+  }
+  return data.map(mapRowToConfig);
+}
+
+// ---------- ICS helpers ----------
 
 function unfoldLines(text) {
   const rawLines = text.split(/\r?\n/);
@@ -33,8 +51,9 @@ function unfoldLines(text) {
 
 function parseICalDate(str) {
   if (!str) return null;
-  const m =
-    str.match(/^(\d{4})(\d{2})(\d{2})(T(\d{2})(\d{2})(\d{2}))?(Z)?$/);
+  const m = str.match(
+    /^(\d{4})(\d{2})(\d{2})(T(\d{2})(\d{2})(\d{2}))?(Z)?$/
+  );
   if (!m) return null;
 
   const year = Number(m[1]);
@@ -113,12 +132,19 @@ function parseICS(text) {
   return events;
 }
 
+// ---------- Fetch via Vercel proxy ----------
+
 async function fetchEventsFromConfig(config) {
   if (!config.url) return [];
-  const res = await fetch(config.url);
+
+  // Gebruik backend-proxy vanwege CORS
+  const proxiedUrl = `/api/ical-proxy?url=${encodeURIComponent(config.url)}`;
+
+  const res = await fetch(proxiedUrl);
   if (!res.ok) {
     throw new Error(`HTTP ${res.status}`);
   }
+
   const text = await res.text();
   const events = parseICS(text);
 
@@ -131,21 +157,21 @@ async function fetchEventsFromConfig(config) {
   return events;
 }
 
+// ---------- Render ----------
+
 function renderEvent(ev, cfg) {
   const f = cfg.fields || {};
   const parts = [];
 
-  if (f.summary !== false && ev.summary) {
-    parts.push(
-      `<div class="ev-title">${escapeHtml(ev.summary)}</div>`
-    );
+  if (f.summary && ev.summary) {
+    parts.push(`<div class="ev-title">${escapeHtml(ev.summary)}</div>`);
   }
 
   const metaPieces = [];
-  if (f.start !== false && ev.startDate) {
+  if (f.start && ev.startDate) {
     metaPieces.push(`Start: ${escapeHtml(formatDateTime(ev.startDate))}`);
   }
-  if (f.end !== false && ev.endDate) {
+  if (f.end && ev.endDate) {
     metaPieces.push(`Einde: ${escapeHtml(formatDateTime(ev.endDate))}`);
   }
 
@@ -153,7 +179,7 @@ function renderEvent(ev, cfg) {
     parts.push(`<div class="ev-meta">${metaPieces.join(' • ')}</div>`);
   }
 
-  if (f.location !== false && ev.location) {
+  if (f.location && ev.location) {
     parts.push(
       `<div class="ev-location">Locatie: ${escapeHtml(ev.location)}</div>`
     );
@@ -176,46 +202,53 @@ function renderEvent(ev, cfg) {
 
 async function initOverview() {
   const container = document.getElementById('events-container');
-  const configs = loadConfigs();
 
-  if (!configs.length) {
-    container.innerHTML =
-      '<p class="error">Er zijn nog geen iCal-links geconfigureerd. Ga eerst naar de iCal Admin-pagina.</p>';
-    return;
-  }
+  try {
+    const configs = await loadConfigs();
 
-  container.textContent = 'Agenda’s worden geladen…';
-
-  const sections = [];
-
-  for (const cfg of configs) {
-    const name = cfg.naam || 'Kalender';
-    try {
-      const events = await fetchEventsFromConfig(cfg);
-      const eventsHtml = events.length
-        ? events.map(ev => renderEvent(ev, cfg)).join('')
-        : '<p class="ev-meta">Geen events gevonden in deze iCal.</p>';
-
-      sections.push(`
-        <section class="calendar">
-          <h2>${escapeHtml(name)}</h2>
-          ${eventsHtml}
-        </section>
-      `);
-    } catch (err) {
-      console.error('Fout bij laden iCal', cfg, err);
-      sections.push(`
-        <section class="calendar">
-          <h2>${escapeHtml(name)}</h2>
-          <p class="error">Kon deze iCal niet laden (${escapeHtml(
-            err.message || 'onbekende fout'
-          )}).</p>
-        </section>
-      `);
+    if (!configs.length) {
+      container.innerHTML =
+        '<p class="error">Er zijn nog geen iCal-links geconfigureerd. Ga eerst naar de iCal Admin-pagina.</p>';
+      return;
     }
-  }
 
-  container.innerHTML = sections.join('');
+    container.textContent = 'Agenda’s worden geladen…';
+
+    const sections = [];
+
+    for (const cfg of configs) {
+      const name = cfg.naam || 'Kalender';
+      try {
+        const events = await fetchEventsFromConfig(cfg);
+        const eventsHtml = events.length
+          ? events.map(ev => renderEvent(ev, cfg)).join('')
+          : '<p class="ev-meta">Geen events gevonden in deze iCal.</p>';
+
+        sections.push(`
+          <section class="calendar">
+            <h2>${escapeHtml(name)}</h2>
+            ${eventsHtml}
+          </section>
+        `);
+      } catch (err) {
+        console.error('Fout bij laden iCal', cfg, err);
+        sections.push(`
+          <section class="calendar">
+            <h2>${escapeHtml(name)}</h2>
+            <p class="error">Kon deze iCal niet laden (${escapeHtml(
+              err.message || 'onbekende fout'
+            )}).</p>
+          </section>
+        `);
+      }
+    }
+
+    container.innerHTML = sections.join('');
+  } catch (err) {
+    console.error('Fout bij loadConfigs', err);
+    container.innerHTML =
+      '<p class="error">Kon de iCal-config niet laden uit de database.</p>';
+  }
 }
 
 document.addEventListener('DOMContentLoaded', initOverview);

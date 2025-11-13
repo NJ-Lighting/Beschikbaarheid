@@ -1,31 +1,38 @@
 // js/admin.js
+import { supabase } from './supabase.client.js';
 
-const STORAGE_KEY = 'ical_links_config_v1';
+function mapRowToConfig(row) {
+  return {
+    id: row.id,
+    naam: row.name,
+    url: row.url,
+    fields: {
+      summary: row.show_summary,
+      description: row.show_description,
+      location: row.show_location,
+      start: row.show_start,
+      end: row.show_end
+    }
+  };
+}
 
-function loadLinks() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    return JSON.parse(raw);
-  } catch (e) {
-    console.error('Kan iCal-config niet laden', e);
-    return [];
+async function loadLinks() {
+  const { data, error } = await supabase
+    .from('ical_sources')
+    .select('*')
+    .order('name', { ascending: true });
+
+  if (error) {
+    console.error('Supabase load error', error);
+    throw error;
   }
+  return data.map(mapRowToConfig);
 }
 
-function saveLinks(links) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(links));
-}
-
-function createId() {
-  return 'ical-' + Math.random().toString(36).slice(2, 10);
-}
-
-function renderLinks() {
+function renderLinksTable(configs) {
   const container = document.getElementById('links-container');
-  const links = loadLinks();
 
-  if (!links.length) {
+  if (!configs.length) {
     container.innerHTML = '<p class="no-links">Nog geen iCal-links toegevoegd.</p>';
     return;
   }
@@ -38,7 +45,7 @@ function renderLinks() {
       <th style="width: 20%;">Acties</th>
     </tr>`;
 
-  const rows = links
+  const rows = configs
     .map(link => {
       const f = link.fields || {};
       return `
@@ -60,11 +67,11 @@ function renderLinks() {
             />
           </td>
           <td class="field-checkboxes">
-            <label><input type="checkbox" data-field="summary" ${f.summary !== false ? 'checked' : ''}> Titel</label>
+            <label><input type="checkbox" data-field="summary" ${f.summary ? 'checked' : ''}> Titel</label>
             <label><input type="checkbox" data-field="description" ${f.description ? 'checked' : ''}> Omschrijving</label>
-            <label><input type="checkbox" data-field="location" ${f.location !== false ? 'checked' : ''}> Locatie</label>
-            <label><input type="checkbox" data-field="start" ${f.start !== false ? 'checked' : ''}> Starttijd</label>
-            <label><input type="checkbox" data-field="end" ${f.end !== false ? 'checked' : ''}> Eindtijd</label>
+            <label><input type="checkbox" data-field="location" ${f.location ? 'checked' : ''}> Locatie</label>
+            <label><input type="checkbox" data-field="start" ${f.start ? 'checked' : ''}> Starttijd</label>
+            <label><input type="checkbox" data-field="end" ${f.end ? 'checked' : ''}> Eindtijd</label>
           </td>
           <td>
             <button class="btn btn-secondary btn-copy">Kopieer iCal-link</button><br>
@@ -83,52 +90,74 @@ function renderLinks() {
     </table>
   `;
 
-  attachRowEvents();
+  attachRowEvents(configs);
 }
 
-function attachRowEvents() {
+function attachRowEvents(configs) {
   const container = document.getElementById('links-container');
-  const links = loadLinks();
 
   container.querySelectorAll('tr[data-id]').forEach(row => {
     const id = row.getAttribute('data-id');
-    const linkIdx = links.findIndex(l => l.id === id);
-    if (linkIdx === -1) return;
+    const link = configs.find(l => l.id === id);
+    if (!link) return;
 
     // Opslaan
-    row.querySelector('.btn-save')?.addEventListener('click', () => {
-      const updated = { ...links[linkIdx] };
+    row.querySelector('.btn-save')?.addEventListener('click', async () => {
       const nameInput = row.querySelector('input[data-field="naam"]');
       const urlInput = row.querySelector('input[data-field="url"]');
 
-      updated.naam = nameInput.value.trim();
-      updated.url = urlInput.value.trim();
+      const naam = nameInput.value.trim();
+      const url = urlInput.value.trim();
 
-      const fields = updated.fields || {};
+      const fields = {};
       ['summary', 'description', 'location', 'start', 'end'].forEach(key => {
         const cb = row.querySelector(
           `input[type="checkbox"][data-field="${key}"]`
         );
-        if (cb) fields[key] = cb.checked;
+        fields[key] = cb ? cb.checked : false;
       });
-      updated.fields = fields;
 
-      links[linkIdx] = updated;
-      saveLinks(links);
-      alert('Opgeslagen 👍');
+      const { error } = await supabase
+        .from('ical_sources')
+        .update({
+          name: naam,
+          url,
+          show_summary: fields.summary,
+          show_description: fields.description,
+          show_location: fields.location,
+          show_start: fields.start,
+          show_end: fields.end
+        })
+        .eq('id', id);
+
+      if (error) {
+        console.error('Supabase update error', error);
+        alert('Opslaan mislukt 😢');
+      } else {
+        alert('Opgeslagen 👍');
+      }
     });
 
     // Verwijderen
-    row.querySelector('.btn-delete')?.addEventListener('click', () => {
+    row.querySelector('.btn-delete')?.addEventListener('click', async () => {
       if (!confirm('Deze iCal-link verwijderen?')) return;
-      const newLinks = links.filter(l => l.id !== id);
-      saveLinks(newLinks);
-      renderLinks();
+
+      const { error } = await supabase
+        .from('ical_sources')
+        .delete()
+        .eq('id', id);
+
+      if (error) {
+        console.error('Supabase delete error', error);
+        alert('Verwijderen mislukt 😢');
+      } else {
+        await refreshLinks();
+      }
     });
 
     // Kopieer iCal-link
     row.querySelector('.btn-copy')?.addEventListener('click', async () => {
-      const url = links[linkIdx].url || '';
+      const url = link.url || '';
       if (!url) {
         alert('Geen URL ingesteld voor deze link.');
         return;
@@ -138,15 +167,13 @@ function attachRowEvents() {
         alert('iCal-link gekopieerd naar klembord 📋');
       } catch (e) {
         console.error(e);
-        alert(
-          'Kon niet naar klembord kopiëren, selecteer de link handmatig.'
-        );
+        alert('Kon niet naar klembord kopiëren, selecteer de link handmatig.');
       }
     });
   });
 }
 
-function handleAddLink() {
+async function handleAddLink() {
   const nameInput = document.getElementById('new-name');
   const urlInput = document.getElementById('new-url');
   const naam = nameInput.value.trim();
@@ -157,29 +184,33 @@ function handleAddLink() {
     return;
   }
 
-  const links = loadLinks();
-  links.push({
-    id: createId(),
-    naam,
+  const { error } = await supabase.from('ical_sources').insert({
+    name: naam,
     url,
-    fields: {
-      summary: true,
-      description: true,
-      location: true,
-      start: true,
-      end: true
-    }
+    show_summary: true,
+    show_description: true,
+    show_location: true,
+    show_start: true,
+    show_end: true
   });
-  saveLinks(links);
+
+  if (error) {
+    console.error('Supabase insert error', error);
+    alert('Toevoegen mislukt 😢');
+    return;
+  }
 
   nameInput.value = '';
   urlInput.value = '';
-  renderLinks();
+  await refreshLinks();
+}
+
+async function refreshLinks() {
+  const configs = await loadLinks();
+  renderLinksTable(configs);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  document
-    .getElementById('add-link')
-    ?.addEventListener('click', handleAddLink);
-  renderLinks();
+  document.getElementById('add-link')?.addEventListener('click', handleAddLink);
+  refreshLinks();
 });
