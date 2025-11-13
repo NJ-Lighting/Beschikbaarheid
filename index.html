@@ -13,6 +13,22 @@
       De zichtbare velden per kalender stel je in op de
       <a href="admin.html">iCal Admin</a>-pagina.
     </p>
+
+    <!-- 🔀 View selector + navigatie -->
+    <div class="view-toolbar">
+      <div class="view-tabs">
+        <button id="view-agenda" class="btn btn-secondary is-active" type="button">Agenda</button>
+        <button id="view-week" class="btn btn-secondary" type="button">Week</button>
+        <button id="view-month" class="btn btn-secondary" type="button">Maand</button>
+      </div>
+      <div class="view-nav">
+        <button id="nav-prev" class="btn btn-secondary" type="button">‹</button>
+        <button id="nav-today" class="btn btn-secondary" type="button">Vandaag</button>
+        <button id="nav-next" class="btn btn-secondary" type="button">›</button>
+      </div>
+    </div>
+
+    <p id="current-range-label" class="info info-range"></p>
   </header>
 
   <main>

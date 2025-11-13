@@ -1,6 +1,12 @@
 // js/overview.js
 import { supabase } from './supabase.client.js';
 
+// Globale state
+let allEvents = [];      // [{ cfg, calendarName, ev }]
+let loadErrors = [];     // string[]
+let currentView = 'agenda';
+let referenceDate = new Date(); // bepaalt week / maand
+
 // ---- Configs uit Supabase ----
 
 function mapRowToConfig(row) {
@@ -71,7 +77,7 @@ function parseICalDate(str) {
   return new Date(year, month, day, hour, min, sec);
 }
 
-function formatDateTime(dt) {
+function formatTime(dt) {
   if (!dt) return '';
   return dt.toLocaleTimeString('nl-NL', {
     hour: '2-digit',
@@ -144,6 +150,42 @@ function parseICS(text) {
   return events;
 }
 
+// ---------- Date helpers voor week/maand ----------
+
+function cloneDate(d) {
+  return new Date(d.getTime());
+}
+
+function startOfWeek(date) {
+  const d = cloneDate(date);
+  const day = d.getDay(); // 0 = zondag, 1 = maandag, ...
+  const diff = day === 0 ? -6 : 1 - day; // maandag als start
+  d.setDate(d.getDate() + diff);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function addDays(date, days) {
+  const d = cloneDate(date);
+  d.setDate(d.getDate() + days);
+  return d;
+}
+
+function startOfMonth(date) {
+  const d = cloneDate(date);
+  d.setDate(1);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function endOfMonth(date) {
+  const d = startOfMonth(date);
+  d.setMonth(d.getMonth() + 1);
+  d.setDate(0); // laatste dag vorige maand
+  d.setHours(23, 59, 59, 999);
+  return d;
+}
+
 // ---------- Fetch via Vercel proxy ----------
 
 async function fetchEventsFromConfig(config) {
@@ -159,9 +201,8 @@ async function fetchEventsFromConfig(config) {
   const text = await res.text();
   const events = parseICS(text);
 
-  // Voeg config info toe zodat we later de kalendernaam weten
   return events
-    .filter(ev => ev.startDate) // alleen events met startdatum
+    .filter(ev => ev.startDate)
     .map(ev => ({
       cfg: config,
       calendarName: config.naam || 'Kalender',
@@ -169,15 +210,15 @@ async function fetchEventsFromConfig(config) {
     }));
 }
 
-// ---------- Render agenda per dag ----------
+// ---------- Views: Agenda / Week / Maand ----------
 
-function renderAgenda(allEvents) {
-  if (!allEvents.length) {
+function renderAgendaView(items) {
+  if (!items.length) {
     return '<p class="ev-meta">Geen events gevonden.</p>';
   }
 
-  // sorteer alle events op starttijd
-  allEvents.sort((a, b) => {
+  // sorteren op starttijd
+  items.sort((a, b) => {
     const ta = a.ev.startDate ? a.ev.startDate.getTime() : 0;
     const tb = b.ev.startDate ? b.ev.startDate.getTime() : 0;
     return ta - tb;
@@ -185,51 +226,44 @@ function renderAgenda(allEvents) {
 
   // groepeer per dag
   const byDay = new Map();
-  for (const item of allEvents) {
+  for (const item of items) {
     const key = dateKey(item.ev.startDate);
-    if (!byDay.has(key)) {
-      byDay.set(key, []);
-    }
+    if (!byDay.has(key)) byDay.set(key, []);
     byDay.get(key).push(item);
   }
 
   const dayKeys = Array.from(byDay.keys()).sort();
 
   const sections = dayKeys.map(key => {
-    const items = byDay.get(key);
-    const dayDate = items[0].ev.startDate;
+    const dayItems = byDay.get(key);
+    const dayDate = dayItems[0].ev.startDate;
     const heading = formatDayHeading(dayDate);
 
-    const rows = items
+    const rows = dayItems
       .map(({ ev, cfg, calendarName }) => {
         const f = cfg.fields || {};
-
         const parts = [];
 
-        // tijd
         if (f.start && ev.startDate) {
-          let timeRange = formatDateTime(ev.startDate);
+          let timeRange = formatTime(ev.startDate);
           if (f.end && ev.endDate) {
-            timeRange += ` – ${formatDateTime(ev.endDate)}`;
+            timeRange += ` – ${formatTime(ev.endDate)}`;
           }
           parts.push(
             `<div class="agenda-time">${escapeHtml(timeRange)}</div>`
           );
         }
 
-        // titel
         if (f.summary && ev.summary) {
           parts.push(
             `<div class="agenda-title">${escapeHtml(ev.summary)}</div>`
           );
         }
 
-        // kalendernaam tag
         parts.push(
           `<div class="agenda-cal-tag">${escapeHtml(calendarName)}</div>`
         );
 
-        // locatie
         if (f.location && ev.location) {
           parts.push(
             `<div class="agenda-location">${escapeHtml(
@@ -238,7 +272,6 @@ function renderAgenda(allEvents) {
           );
         }
 
-        // omschrijving
         if (f.description && ev.description) {
           parts.push(
             `<div class="agenda-description">${escapeHtml(
@@ -264,8 +297,263 @@ function renderAgenda(allEvents) {
   return sections.join('');
 }
 
+function renderWeekView(items, refDate) {
+  const start = startOfWeek(refDate);
+  const days = [];
+
+  for (let i = 0; i < 7; i++) {
+    const dayDate = addDays(start, i);
+    const key = dateKey(dayDate);
+    const dayItems = items
+      .filter(x => dateKey(x.ev.startDate) === key)
+      .sort((a, b) => a.ev.startDate - b.ev.startDate);
+
+    days.push({ date: dayDate, items: dayItems });
+  }
+
+  const weekdayLabels = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
+
+  const cols = days
+    .map((day, idx) => {
+      const label = weekdayLabels[idx];
+      const dateLabel = day.date.toLocaleDateString('nl-NL', {
+        day: '2-digit',
+        month: '2-digit'
+      });
+
+      const evHtml = day.items
+        .map(({ ev, cfg, calendarName }) => {
+          const f = cfg.fields || {};
+          const parts = [];
+
+          if (f.start && ev.startDate) {
+            let timeRange = formatTime(ev.startDate);
+            if (f.end && ev.endDate) {
+              timeRange += `–${formatTime(ev.endDate)}`;
+            }
+            parts.push(
+              `<div class="week-event-time">${escapeHtml(timeRange)}</div>`
+            );
+          }
+
+          if (f.summary && ev.summary) {
+            parts.push(
+              `<div class="week-event-title">${escapeHtml(
+                ev.summary
+              )}</div>`
+            );
+          }
+
+          parts.push(
+            `<div class="week-event-cal">${escapeHtml(calendarName)}</div>`
+          );
+
+          return `<div class="week-event">${parts.join('')}</div>`;
+        })
+        .join('');
+
+      return `
+        <div class="week-day-col">
+          <div class="week-day-label">${escapeHtml(label)}</div>
+          <div class="week-day-date">${escapeHtml(dateLabel)}</div>
+          ${evHtml || '<div class="week-event-cal">—</div>'}
+        </div>
+      `;
+    })
+    .join('');
+
+  return `<div class="week-grid">${cols}</div>`;
+}
+
+function renderMonthView(items, refDate) {
+  const startMonth = startOfMonth(refDate);
+  const endMonthDate = endOfMonth(refDate);
+
+  // begin rooster op maandag van de week waarin de 1e ligt
+  const gridStart = startOfWeek(startMonth);
+  // eind rooster op zondag van de week waarin de laatste dag ligt
+  const gridEnd = addDays(startOfWeek(endMonthDate), 6);
+
+  const days = [];
+  let cursor = cloneDate(gridStart);
+  while (cursor <= gridEnd) {
+    days.push(cloneDate(cursor));
+    cursor = addDays(cursor, 1);
+  }
+
+  const weekdayLabels = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
+
+  const headerRow = weekdayLabels
+    .map(label => `<div class="month-weekday-header">${label}</div>`)
+    .join('');
+
+  const cells = days
+    .map(dayDate => {
+      const inMonth =
+        dayDate.getMonth() === refDate.getMonth() &&
+        dayDate.getFullYear() === refDate.getFullYear();
+
+      const key = dateKey(dayDate);
+      const dayItems = items
+        .filter(x => dateKey(x.ev.startDate) === key)
+        .sort((a, b) => a.ev.startDate - b.ev.startDate);
+
+      const dayNum = dayDate.getDate();
+
+      const evHtml = dayItems
+        .slice(0, 3) // max 3 regels per cel
+        .map(({ ev, cfg }) => {
+          const f = cfg.fields || {};
+          const pieces = [];
+
+          if (f.start && ev.startDate) {
+            pieces.push(
+              `<span class="month-event-time">${escapeHtml(
+                formatTime(ev.startDate)
+              )}</span>`
+            );
+          }
+
+          if (f.summary && ev.summary) {
+            pieces.push(
+              `<span class="month-event-title">${escapeHtml(
+                ev.summary
+              )}</span>`
+            );
+          }
+
+          return `<div class="month-event">${pieces.join(' ')}</div>`;
+        })
+        .join('');
+
+      const extra =
+        dayItems.length > 3
+          ? `<div class="month-event">+${dayItems.length - 3} meer…</div>`
+          : '';
+
+      return `
+        <div class="month-cell ${inMonth ? '' : 'month-cell-outside'}">
+          <div class="month-day-number">${dayNum}</div>
+          ${evHtml || ''}
+          ${extra}
+        </div>
+      `;
+    })
+    .join('');
+
+  return `<div class="month-grid">
+    ${headerRow}
+    ${cells}
+  </div>`;
+}
+
+// ---------- View switching & range label ----------
+
+function updateRangeLabel() {
+  const el = document.getElementById('current-range-label');
+  if (!el) return;
+
+  if (currentView === 'agenda') {
+    el.textContent = 'Alle events gecombineerd (op datum gesorteerd).';
+    return;
+  }
+
+  if (currentView === 'week') {
+    const start = startOfWeek(referenceDate);
+    const end = addDays(start, 6);
+    const startLabel = start.toLocaleDateString('nl-NL', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric'
+    });
+    const endLabel = end.toLocaleDateString('nl-NL', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric'
+    });
+    el.textContent = `Week van ${startLabel} t/m ${endLabel}`;
+    return;
+  }
+
+  if (currentView === 'month') {
+    const label = referenceDate.toLocaleDateString('nl-NL', {
+      month: 'long',
+      year: 'numeric'
+    });
+    el.textContent = label.charAt(0).toUpperCase() + label.slice(1);
+    return;
+  }
+}
+
+function renderCurrentView() {
+  const container = document.getElementById('events-container');
+  if (!container) return;
+
+  let html = '';
+
+  if (loadErrors.length) {
+    html += `<div class="error">${loadErrors
+      .map(escapeHtml)
+      .join('<br>')}</div>`;
+  }
+
+  if (!allEvents.length) {
+    html += '<p class="ev-meta">Geen events gevonden in de beschikbare kalenders.</p>';
+    container.innerHTML = html;
+    updateRangeLabel();
+    return;
+  }
+
+  if (currentView === 'agenda') {
+    html += renderAgendaView([...allEvents]);
+  } else if (currentView === 'week') {
+    html += renderWeekView([...allEvents], referenceDate);
+  } else if (currentView === 'month') {
+    html += renderMonthView([...allEvents], referenceDate);
+  }
+
+  container.innerHTML = html;
+  updateRangeLabel();
+}
+
+function setView(view) {
+  currentView = view;
+  if (view === 'week' || view === 'month') {
+    referenceDate = new Date();
+  }
+
+  // actieve knop stylen
+  const views = ['agenda', 'week', 'month'];
+  views.forEach(v => {
+    const btn = document.getElementById(`view-${v}`);
+    if (btn) {
+      btn.classList.toggle('is-active', v === view);
+    }
+  });
+
+  renderCurrentView();
+}
+
+function shiftReference(direction) {
+  // direction: -1 of +1
+  if (currentView === 'week') {
+    referenceDate = addDays(referenceDate, direction * 7);
+  } else if (currentView === 'month') {
+    const d = cloneDate(referenceDate);
+    d.setMonth(d.getMonth() + direction);
+    referenceDate = d;
+  } else {
+    // in agenda-view doet nav niets
+    return;
+  }
+  renderCurrentView();
+}
+
+// ---------- Init ----------
+
 async function initOverview() {
   const container = document.getElementById('events-container');
+  container.textContent = 'Agenda’s worden geladen…';
 
   try {
     const configs = await loadConfigs();
@@ -276,18 +564,16 @@ async function initOverview() {
       return;
     }
 
-    container.textContent = 'Agenda’s worden geladen…';
-
-    const allEvents = [];
-    const errors = [];
+    allEvents = [];
+    loadErrors = [];
 
     for (const cfg of configs) {
       try {
-        const eventsForCfg = await fetchEventsFromConfig(cfg);
-        allEvents.push(...eventsForCfg);
+        const items = await fetchEventsFromConfig(cfg);
+        allEvents.push(...items);
       } catch (err) {
         console.error('Fout bij laden iCal', cfg, err);
-        errors.push(
+        loadErrors.push(
           `Kon iCal van "${cfg.naam || 'Kalender'}" niet laden: ${
             err.message || 'onbekende fout'
           }`
@@ -295,22 +581,32 @@ async function initOverview() {
       }
     }
 
-    let html = '';
+    // default: agenda view
+    setView('agenda');
 
-    if (errors.length) {
-      html += `<div class="error">${errors
-        .map(escapeHtml)
-        .join('<br>')}</div>`;
-    }
+    // buttons
+    document
+      .getElementById('view-agenda')
+      ?.addEventListener('click', () => setView('agenda'));
+    document
+      .getElementById('view-week')
+      ?.addEventListener('click', () => setView('week'));
+    document
+      .getElementById('view-month')
+      ?.addEventListener('click', () => setView('month'));
 
-    if (!allEvents.length) {
-      html +=
-        '<p class="ev-meta">Geen events gevonden in de beschikbare kalenders.</p>';
-    } else {
-      html += renderAgenda(allEvents);
-    }
-
-    container.innerHTML = html;
+    document
+      .getElementById('nav-prev')
+      ?.addEventListener('click', () => shiftReference(-1));
+    document
+      .getElementById('nav-next')
+      ?.addEventListener('click', () => shiftReference(1));
+    document
+      .getElementById('nav-today')
+      ?.addEventListener('click', () => {
+        referenceDate = new Date();
+        renderCurrentView();
+      });
   } catch (err) {
     console.error('Fout bij loadConfigs', err);
     container.innerHTML =
