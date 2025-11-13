@@ -1,36 +1,44 @@
-// api/ical-proxy.js
-
+// /api/ical-proxy.js
 export default async function handler(req, res) {
-  const { url } = req.query;
-
-  if (!url) {
-    res.status(400).send('Missing url parameter');
-    return;
-  }
-
   try {
-    const target = decodeURIComponent(url);
-    console.log('Proxy fetching:', target);
+    const { url } = req.query;
 
-    const response = await fetch(target);
-
-    if (!response.ok) {
-      const text = await response.text().catch(() => '');
-      console.error('Upstream error:', response.status, text.slice(0, 200));
-      res
-        .status(response.status)
-        .send(`Upstream error ${response.status}: ${response.statusText}`);
+    if (!url) {
+      res.status(400).send('Missing url parameter');
       return;
     }
 
-    const text = await response.text();
+    // Eén keer decoderen, omdat in de frontend encodeURIComponent() wordt gebruikt
+    const targetUrl = decodeURIComponent(url);
 
+    // Klein veiligheidscheckje
+    if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+      res.status(400).send('Invalid target URL');
+      return;
+    }
+
+    // Fetch de ICS bij de bron (Google, Profuze, etc.)
+    const upstream = await fetch(targetUrl);
+
+    // Stuur HTTP-status 1-op-1 door
+    const status = upstream.status;
+
+    // Tekstinhoud lezen (ICS is gewoon text)
+    const text = await upstream.text();
+
+    // Content-Type doorgeven (of fallback)
+    const contentType =
+      upstream.headers.get('content-type') ||
+      'text/calendar; charset=utf-8';
+
+    res.setHeader('Content-Type', contentType);
+
+    // CORS is eigenlijk niet nodig (same origin), maar kan geen kwaad
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
 
-    res.status(200).send(text);
-  } catch (e) {
-    console.error('Error in ical-proxy:', e);
-    res.status(500).send('Proxy error');
+    res.status(status).send(text);
+  } catch (err) {
+    console.error('ical-proxy error', err);
+    res.status(500).send('Internal ical-proxy error');
   }
 }
