@@ -18,12 +18,12 @@ function buildGoogleIcsUrl(raw) {
   if (!raw) return null;
   raw = raw.trim();
 
-  // Als het al een ICS-link is → gewoon teruggeven
+  // Als het al een ICS-link is → direct teruggeven
   if (raw.startsWith('http') && raw.includes('/calendar/ical/')) {
     return raw;
   }
 
-  // Als het een volledige URL is (embed, etc.)
+  // Volledige Google-URL (embed etc.)
   let calendarId = null;
   if (raw.startsWith('http')) {
     try {
@@ -42,9 +42,8 @@ function buildGoogleIcsUrl(raw) {
     }
   }
 
-  // Als het geen geldige URL was, of geen embed, dan kan het direct een ID zijn
+  // Als het geen URL is, behandelen als direct Calendar ID
   if (!calendarId && !raw.startsWith('http')) {
-    // b161se...@import.calendar.google.com
     calendarId = raw;
   }
 
@@ -53,8 +52,6 @@ function buildGoogleIcsUrl(raw) {
   }
 
   const enc = encodeURIComponent(calendarId);
-  // Standaard: public/basic.ics. Als de agenda niet openbaar is, kun je beter
-  // in Google zelf de "Secret iCal address" pakken en direct in het iCal-vak plakken.
   return `https://calendar.google.com/calendar/ical/${enc}/public/basic.ics`;
 }
 
@@ -86,27 +83,26 @@ async function loadSources() {
   return data.map(mapRow);
 }
 
-async function insertSource(payload) {
-  const { data, error } = await supabase
-    .from('ical_sources')
-    .insert(payload)
-    .select()
-    .single();
+// ⬇️ Hier vereenvoudigen we insert / update (geen select() meer)
 
-  if (error) throw error;
-  return mapRow(data);
+async function insertSource(payload) {
+  const { error } = await supabase.from('ical_sources').insert(payload);
+  if (error) {
+    console.error('Insert error', error);
+    throw error;
+  }
 }
 
 async function updateSource(id, payload) {
-  const { data, error } = await supabase
+  const { error } = await supabase
     .from('ical_sources')
     .update(payload)
-    .eq('id', id)
-    .select()
-    .single();
+    .eq('id', id);
 
-  if (error) throw error;
-  return mapRow(data);
+  if (error) {
+    console.error('Update error', error);
+    throw error;
+  }
 }
 
 async function deleteSource(id) {
@@ -115,7 +111,10 @@ async function deleteSource(id) {
     .delete()
     .eq('id', id);
 
-  if (error) throw error;
+  if (error) {
+    console.error('Delete error', error);
+    throw error;
+  }
 }
 
 // ---- Render overview ----
@@ -185,7 +184,7 @@ async function renderSources() {
         const tr = btn.closest('tr');
         const id = tr?.getAttribute('data-id');
         if (!id) return;
-        const src = sources.find(s => s.id === id);
+        const src = sources.find(s => String(s.id) === String(id));
         if (src) fillFormForEdit(src);
       });
     });
@@ -204,8 +203,11 @@ async function renderSources() {
           setMessage('Agenda-bron verwijderd.');
           renderSources();
         } catch (err) {
-          console.error('Delete error', err);
-          setMessage('Kon agenda-bron niet verwijderen.', true);
+          console.error('Delete error (outer)', err);
+          setMessage(
+            `Kon agenda-bron niet verwijderen: ${err.message || 'onbekende fout'}`,
+            true
+          );
         }
       });
     });
@@ -289,7 +291,10 @@ async function initAdmin() {
       renderSources();
     } catch (err) {
       console.error('Save error', err);
-      setMessage('Fout bij opslaan van agenda-bron.', true);
+      setMessage(
+        `Fout bij opslaan van agenda-bron: ${err.message || 'onbekende fout'}`,
+        true
+      );
     }
   });
 
